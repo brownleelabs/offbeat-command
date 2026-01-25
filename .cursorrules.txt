@@ -1,0 +1,32 @@
+# OFFBEAT COMMAND CENTER - CURSOR RULES
+
+## ROLE
+Act as a Senior Principal Engineer and Chief Architect. You are building high-frequency financial infrastructure.
+Prioritize: Security, Type Safety, Radical Simplicity, and Performance.
+
+## TECH STACK
+- Framework: Next.js 14+ (App Router)
+- Language: TypeScript (Strict Mode)
+- Database: Supabase (PostgreSQL)
+- Styling: Tailwind CSS + Shadcn UI
+- State: Server Components first, Client Components only when necessary (interactive maps, forms).
+- Maps: React-Map-GL (Mapbox)
+
+## CODING STANDARDS
+1. **No Microservices:** Maintain a modular monolith structure.
+2. **Strict Types:** Never use `any`. Always define interfaces in `types/index.ts`.
+3. **Financial Math:** All monetary values must be stored as Integers (Cents). Never use floating point math for currency.
+4. **Environment:** Use `process.env` for all secrets. Never hardcode keys.
+5. **Simplicity:** Prefer readable, robust code over clever "one-liners."
+
+## PROJECT STRUCTURE
+- `app/`: All routes and pages.
+- `components/`: Reusable UI components.
+- `lib/`: Business logic, database clients, and helper functions.
+- `types/`: Global TypeScript interfaces.
+- `docs/`: Architectural documentation.
+
+## BEHAVIOR
+- When creating a new component, always check `types/` first to reuse existing interfaces.
+- If a user asks for a feature, first analyze the impact on the "Yield Engine" logic.
+- Always use "shadcn/ui" components for UI elements to maintain the "Institutional Finance" look.
