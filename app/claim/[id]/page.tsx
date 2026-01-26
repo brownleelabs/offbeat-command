@@ -2,34 +2,34 @@
 
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
-import { claimToken } from '@/app/actions' // Call the server action
+import { claimToken } from '@/app/actions'
 
 export default function ClaimPage() {
   const params = useParams()
   const [status, setStatus] = useState('claiming')
+  const [errorMsg, setErrorMsg] = useState('')
 
   useEffect(() => {
-    // 1. Get the ID from the URL
     const id = params.id as string
     if (!id) return
 
-    // 2. Ask the Server to mark it as found
     async function performClaim() {
       try {
         await claimToken(id)
         setStatus('success')
-      } catch (err) {
-        console.error(err)
+      } catch (err: any) {
+        console.error("Claim failed:", err)
+        // Show the actual error message on screen
         setStatus('error')
+        setErrorMsg(err.message || "Unknown Error")
       }
     }
 
     performClaim()
   }, [params.id])
 
-  // 3. The UI
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-black text-white">
+    <div className="flex flex-col h-screen w-screen items-center justify-center bg-black text-white p-4">
       {status === 'claiming' && <h1 className="text-2xl animate-pulse">Verifying Asset...</h1>}
       
       {status === 'success' && (
@@ -41,8 +41,10 @@ export default function ClaimPage() {
 
       {status === 'error' && (
         <div className="text-center">
-          <h1 className="text-red-500 text-3xl">System Error</h1>
-          <p>Could not verify token.</p>
+          <h1 className="text-red-500 text-3xl font-bold mb-4">System Error</h1>
+          <div className="bg-red-900/30 p-4 rounded border border-red-500/50">
+            <p className="font-mono text-sm break-all">{errorMsg}</p>
+          </div>
         </div>
       )}
     </div>
