@@ -10,10 +10,32 @@ import {
 } from "@/types";
 
 type PageStatus = "loading" | "form" | "submitting" | "success" | "error";
+type SubmitPhase = "location" | "saving";
+
+function getCurrentPositionAsync(
+  options?: PositionOptions
+): Promise<{ lat: number; lng: number } | null> {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      console.warn("Geolocation not supported");
+      resolve(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => {
+        console.warn("Geolocation error:", err.message);
+        resolve(null);
+      },
+      { timeout: 15000, maximumAge: 60000, ...options }
+    );
+  });
+}
 
 export default function ClaimPage() {
   const params = useParams();
   const [status, setStatus] = useState<PageStatus>("loading");
+  const [submitPhase, setSubmitPhase] = useState<SubmitPhase>("saving");
   const [errorMsg, setErrorMsg] = useState("");
   const [tokenId, setTokenId] = useState<string | null>(null);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
@@ -65,11 +87,15 @@ export default function ClaimPage() {
     if (!tokenId) return;
 
     setStatus("submitting");
+    setSubmitPhase("location");
     setErrorMsg("");
 
     const supabase = createClient();
 
     try {
+      const coords = await getCurrentPositionAsync();
+      setSubmitPhase("saving");
+
       const campaignId = campaign?.id ?? null;
       const questions = Array.isArray(campaign?.questions) ? campaign.questions : [];
       const customAnswersArray = questions.map((q: CampaignQuestion) => ({
@@ -91,9 +117,17 @@ export default function ClaimPage() {
 
       if (insertError) throw insertError;
 
+      const tokenUpdate: { status: "found"; lat?: number; lng?: number } = {
+        status: "found",
+      };
+      if (coords) {
+        tokenUpdate.lat = coords.lat;
+        tokenUpdate.lng = coords.lng;
+      }
+
       const { error: updateError } = await supabase
         .from("tokens")
-        .update({ status: "found" })
+        .update(tokenUpdate)
         .eq("id", tokenId);
 
       if (updateError) throw updateError;
@@ -219,12 +253,19 @@ export default function ClaimPage() {
               </div>
             )}
 
+            <p className="mt-4 text-center text-xs text-zinc-500">
+              Location Access Required for Reward
+            </p>
             <button
               type="submit"
               disabled={status === "submitting"}
-              className="mt-6 w-full rounded bg-green-600 py-3 font-bold text-black disabled:opacity-50"
+              className="mt-3 w-full rounded bg-green-600 py-3 font-bold text-black disabled:opacity-50"
             >
-              {status === "submitting" ? "Submitting..." : "Submit & claim $25.00"}
+              {status === "submitting"
+                ? submitPhase === "location"
+                  ? "Getting your location..."
+                  : "Submitting..."
+                : "Submit & claim $25.00"}
             </button>
           </form>
         </div>
