@@ -33,6 +33,7 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>("map");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [tokens, setTokens] = useState<TokenWithCampaign[]>([]);
+  const [responsesCount, setResponsesCount] = useState<number>(0);
   const [selectedTokenIds, setSelectedTokenIds] = useState<Set<string>>(new Set());
   const [targetCampaignId, setTargetCampaignId] = useState("");
 
@@ -57,16 +58,22 @@ export default function AdminDashboard() {
       .order("id");
     if (!error && tData) {
       setTokens(normalizeTokensWithCampaign(tData));
-      return;
+    } else {
+      if (error) {
+        console.warn("Fleet join failed, loading tokens only:", error.message);
+      }
+      const { data: tokensOnly } = await supabase
+        .from("tokens")
+        .select("*")
+        .order("id");
+      setTokens(normalizeTokensWithCampaign(tokensOnly ?? []));
     }
-    if (error) {
-      console.warn("Fleet join failed, loading tokens only:", error.message);
-    }
-    const { data: tokensOnly } = await supabase
-      .from("tokens")
-      .select("*")
-      .order("id");
-    setTokens(normalizeTokensWithCampaign(tokensOnly ?? []));
+
+    // Responses count: all rows (persists even when campaigns are archived)
+    const { count } = await supabase
+      .from("responses")
+      .select("*", { count: "exact", head: true });
+    setResponsesCount(count ?? 0);
   }
 
   async function assignTokens() {
@@ -89,7 +96,10 @@ export default function AdminDashboard() {
         </h1>
         <div className="flex rounded-lg border border-gray-800 bg-black p-1">
           <button
-            onClick={() => setActiveTab("map")}
+            onClick={() => {
+              setActiveTab("map");
+              loadData();
+            }}
             className={`rounded-md px-6 py-2 transition ${
               activeTab === "map" ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
             }`}
@@ -97,7 +107,10 @@ export default function AdminDashboard() {
             MAP
           </button>
           <button
-            onClick={() => setActiveTab("fleet")}
+            onClick={() => {
+              setActiveTab("fleet");
+              loadData();
+            }}
             className={`rounded-md px-6 py-2 transition ${
               activeTab === "fleet" ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
             }`}
@@ -119,8 +132,13 @@ export default function AdminDashboard() {
       </nav>
 
       <main className="p-0">
+        <ProjectStats
+          tokenCount={tokens.length}
+          foundCount={tokens.filter((t) => t.status === "found").length}
+          responsesCount={responsesCount}
+        />
         {activeTab === "map" && (
-          <div className="h-[calc(100vh-72px)] w-full">
+          <div className="h-[calc(100vh-72px-8rem)] w-full">
             <MapView />
           </div>
         )}
@@ -142,6 +160,56 @@ export default function AdminDashboard() {
           <CampaignsTab campaigns={campaigns} onRefresh={loadData} supabase={supabase} />
         )}
       </main>
+    </div>
+  );
+}
+
+const PAYOUT_PER_RESPONSE = 25;
+
+function ProjectStats({
+  tokenCount,
+  foundCount,
+  responsesCount,
+}: {
+  tokenCount: number;
+  foundCount: number;
+  responsesCount: number;
+}) {
+  const progress = tokenCount > 0 ? (foundCount / tokenCount) * 100 : 0;
+  const totalPayout = responsesCount * PAYOUT_PER_RESPONSE;
+
+  return (
+    <div className="grid grid-cols-1 gap-4 border-b border-white/5 bg-black/40 px-6 py-4 md:grid-cols-3">
+      <div className="rounded-xl border border-white/5 bg-zinc-900/50 p-4 backdrop-blur-sm">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+          Fleet Status
+        </h3>
+        <p className="mb-2 font-mono text-xl font-bold text-white">
+          {foundCount} / {tokenCount}
+        </p>
+        <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+          <div
+            className="h-full rounded-full bg-blue-500 transition-all duration-500"
+            style={{ width: `${Math.min(progress, 100)}%` }}
+          />
+        </div>
+      </div>
+      <div className="rounded-xl border border-white/5 bg-zinc-900/50 p-4 backdrop-blur-sm">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+          Research Participation
+        </h3>
+        <p className="font-mono text-xl font-bold text-white">
+          {responsesCount.toLocaleString()} submission{responsesCount !== 1 ? "s" : ""}
+        </p>
+      </div>
+      <div className="rounded-xl border border-white/5 bg-zinc-900/50 p-4 backdrop-blur-sm">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+          Payout Liability
+        </h3>
+        <p className="font-mono text-xl font-bold tabular-nums text-green-500">
+          ${totalPayout.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+        </p>
+      </div>
     </div>
   );
 }
