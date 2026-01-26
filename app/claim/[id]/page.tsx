@@ -1,45 +1,50 @@
-"use client";
+'use client'
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import { createClient } from "@/lib/supabase";
-import { Loader2 } from "lucide-react";
-
-type Phase = "verifying" | "success";
+import { useState, useEffect } from 'react'
+import { useParams } from 'next/navigation'
+import { claimToken } from '@/app/actions' // Call the server action
 
 export default function ClaimPage() {
-  const params = useParams();
-  const id = typeof params.id === "string" ? params.id : params.id?.[0] ?? "";
-  const [phase, setPhase] = useState<Phase>("verifying");
+  const params = useParams()
+  const [status, setStatus] = useState('claiming')
 
   useEffect(() => {
-    if (!id) return;
+    // 1. Get the ID from the URL
+    const id = params.id as string
+    if (!id) return
 
-    const supabase = createClient();
+    // 2. Ask the Server to mark it as found
+    async function performClaim() {
+      try {
+        await claimToken(id)
+        setStatus('success')
+      } catch (err) {
+        console.error(err)
+        setStatus('error')
+      }
+    }
 
-    const run = async () => {
-      await supabase.from("tokens").update({ status: "found" }).eq("id", id);
-    };
+    performClaim()
+  }, [params.id])
 
-    run();
-
-    const t = setTimeout(() => setPhase("success"), 2000);
-    return () => clearTimeout(t);
-  }, [id]);
-
+  // 3. The UI
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-black font-mono text-emerald-400">
-      {phase === "verifying" && (
-        <>
-          <Loader2 className="h-10 w-10 animate-spin text-emerald-500" />
-          <p className="text-lg">Verifying Chip...</p>
-        </>
+    <div className="flex h-screen w-screen items-center justify-center bg-black text-white">
+      {status === 'claiming' && <h1 className="text-2xl animate-pulse">Verifying Asset...</h1>}
+      
+      {status === 'success' && (
+        <div className="text-center">
+          <h1 className="text-4xl font-bold text-green-500 mb-4">ACCESS GRANTED</h1>
+          <p className="text-xl">Asset Secured: $25.00</p>
+        </div>
       )}
-      {phase === "success" && (
-        <p className="text-xl font-semibold text-emerald-300">
-          Success: $25.00 Sent
-        </p>
+
+      {status === 'error' && (
+        <div className="text-center">
+          <h1 className="text-red-500 text-3xl">System Error</h1>
+          <p>Could not verify token.</p>
+        </div>
       )}
     </div>
-  );
+  )
 }
