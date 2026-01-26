@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { submitClaim } from "@/app/actions";
 import {
   CAMPAIGN_REQUIRED_FIELDS,
@@ -9,6 +9,28 @@ import {
 } from "@/types";
 
 type SubmitPhase = "location" | "saving";
+
+/** Collect any data available from the tap context (browser/device) without extra permissions. */
+function getClaimMetadata(): Record<string, unknown> {
+  if (typeof window === "undefined") return {};
+  const m: Record<string, unknown> = {
+    user_agent: navigator.userAgent,
+    language: navigator.language,
+    languages: Array.isArray(navigator.languages) ? navigator.languages : [],
+    platform: navigator.platform ?? undefined,
+    screen_width: window.screen?.width,
+    screen_height: window.screen?.height,
+    device_pixel_ratio: window.devicePixelRatio,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timezone_offset_min: new Date().getTimezoneOffset(),
+    hardware_concurrency: (navigator as { hardwareConcurrency?: number }).hardwareConcurrency,
+    cookie_enabled: navigator.cookieEnabled,
+  };
+  const nav = navigator as { deviceMemory?: number; connection?: { effectiveType?: string } };
+  if (typeof nav.deviceMemory === "number") m.device_memory_gb = nav.deviceMemory;
+  if (nav.connection?.effectiveType) m.connection_effective_type = nav.connection.effectiveType;
+  return m;
+}
 
 function getCurrentPositionAsync(
   options?: PositionOptions
@@ -43,6 +65,8 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
   const [venmoUsername, setVenmoUsername] = useState("");
   const [customAnswers, setCustomAnswers] = useState<Record<number, string>>({});
 
+  const tapOpenedAt = useMemo(() => new Date().toISOString(), []);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("submitting");
@@ -60,6 +84,12 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         answer: customAnswers[q.order]?.trim() ?? "",
       }));
 
+      const claimMetadata: Record<string, unknown> = {
+        ...getClaimMetadata(),
+        timestamp_open: tapOpenedAt,
+        timestamp_submit: new Date().toISOString(),
+      };
+
       const result = await submitClaim({
         tokenId,
         campaignId: campaign?.id ?? null,
@@ -71,6 +101,7 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         customAnswers: customAnswersArray,
         lat: coords?.lat ?? null,
         lng: coords?.lng ?? null,
+        claimMetadata,
       });
 
       if (result.success) {

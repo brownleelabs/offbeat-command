@@ -4,7 +4,7 @@ import Map, { Marker } from "react-map-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { MapPin, RefreshCw, Activity } from "lucide-react";
 import type { Token } from "@/types";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { useDashboard } from "@/components/dashboard-context";
 import { resetDemo } from "@/app/actions";
@@ -21,18 +21,37 @@ interface MapViewProps {
   readOnly?: boolean;
   /** When set, fetch tokens for this org instead of using dashboard context. Used for public /schools/[slug]. */
   orgId?: string | null;
+  /** Mapbox access token (passed from parent so dynamic import has it). Falls back to NEXT_PUBLIC_MAPBOX_TOKEN. */
+  mapboxToken?: string | null;
+  /** When false, hide Reset button (e.g. when role has no map_reset permission). Default true. */
+  canReset?: boolean;
 }
 
-export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapViewProps = {}) {
+export default function MapView({ readOnly = false, orgId: orgIdOverride, mapboxToken: mapboxTokenProp, canReset = true }: MapViewProps = {}) {
   const dashboard = useDashboard();
   const orgId = orgIdOverride != null ? orgIdOverride : dashboard.orgId;
 
   const [tokens, setTokens] = useState<Token[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [isReseting, setIsReseting] = useState(false);
+  const [containerReady, setContainerReady] = useState(false);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = mapContainerRef.current;
+    if (!el) return;
+    const check = () => {
+      const { width, height } = el.getBoundingClientRect();
+      setContainerReady(width > 0 && height >= 200);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const supabase = createClient();
 
+  // Map access: no per-org blocking; every org sees the map. Restriction is which tokens are shown (filter by school/org).
   const fetchTokens = useCallback(async () => {
     const client = createClient();
     let query = client.from("tokens").select("*");
@@ -48,10 +67,10 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
     fetchTokens();
   }, [fetchTokens]);
 
-  // 2. Realtime Listener (only apply updates for current org when orgId set)
+  // 2. Realtime: tokens (status/position) + responses (new claims for Live Feed)
   useEffect(() => {
     const channel = supabase
-      .channel("tokens-demo")
+      .channel("map-live")
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "tokens" },
@@ -74,6 +93,22 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
           }
         }
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "responses",
+          ...(orgId ? { filter: `organization_id=eq.${orgId}` } : {}),
+        },
+        (payload: { new: { token_id?: string; organization_id?: string | null } }) => {
+          const row = payload.new;
+          if (orgId != null && row.organization_id !== orgId) return;
+          const tokenId = (row.token_id ?? "").slice(-4);
+          const time = new Date().toLocaleTimeString();
+          setLogs((prev) => [`[${time}] Claim submitted ...${tokenId}`, ...prev]);
+        }
+      )
       .subscribe();
 
     return () => {
@@ -92,13 +127,13 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
     }
   };
 
-  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-  const canShowMap = !!mapboxToken;
+  const mapboxToken = mapboxTokenProp ?? process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
+  const canShowMap = !!mapboxToken && containerReady;
 
   return (
-    <div className="relative h-full min-h-[400px] w-full bg-background">
-      {/* --- THE MAP (needs token and a sized container so mapbox-gl gets real dimensions) --- */}
-      <div className="absolute inset-0 min-h-[400px]">
+    <div className="relative w-full flex-1 min-h-[400px] bg-background" style={{ height: "100%", minHeight: 400 }}>
+      {/* Map is available to all orgs; tokens are filtered by school/org (dashboard orgId). */}
+      <div ref={mapContainerRef} className="absolute inset-0 w-full" style={{ minHeight: 400, height: "100%" }}>
         {canShowMap ? (
           <Map
             initialViewState={INITIAL_VIEW_STATE}
@@ -126,10 +161,10 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
             ))}
           </Map>
         ) : (
-          <div className="flex h-full w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-8 text-center">
+          <div className="flex h-full min-h-[400px] w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-8 text-center">
             <p className="text-muted-foreground">
-              Map unavailable: add <code className="rounded bg-muted px-1">NEXT_PUBLIC_MAPBOX_TOKEN</code> to{" "}
-              <code className="rounded bg-muted px-1">.env.local</code>
+              Map unavailable: set <code className="rounded bg-muted px-1">NEXT_PUBLIC_MAPBOX_TOKEN</code> in{" "}
+              <code className="rounded bg-muted px-1">.env.local</code> and restart the dev server.
             </p>
           </div>
         )}
@@ -176,8 +211,8 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
         </div>
       </div>
 
-      {/* 3. BOTTOM RIGHT: The Reset Button (hidden in readOnly / public student view) */}
-      {!readOnly && (
+      {/* 3. BOTTOM RIGHT: The Reset Button (hidden in readOnly or when canReset is false) */}
+      {!readOnly && canReset && (
         <div className="absolute bottom-8 right-8 z-50">
           <button
             onClick={handleReset}

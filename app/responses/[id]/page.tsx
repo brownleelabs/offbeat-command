@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
-import { ArrowLeft, User, Mail, CreditCard, Hash, FileText } from "lucide-react";
+import { ArrowLeft, User, Mail, CreditCard, Hash, FileText, Smartphone } from "lucide-react";
 
 type CustomAnswerItem = { order?: number; text?: string; answer?: string };
 
@@ -16,6 +16,7 @@ type ResponseRecord = {
   student_email: string | null;
   venmo_username: string | null;
   custom_answers?: CustomAnswerItem[] | null;
+  claim_metadata?: Record<string, unknown> | null;
   created_at?: string | null;
 };
 
@@ -132,6 +133,17 @@ export default function ResponseDetailPage() {
             ))}
           </div>
         </div>
+
+        {response.claim_metadata && Object.keys(response.claim_metadata).length > 0 && (
+          <div className="mt-8 rounded-2xl border border-accent bg-muted p-6">
+            <h2 className="mb-4 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">
+              <Smartphone size={14} /> Tap / claim metadata
+            </h2>
+            <pre className="max-h-64 overflow-auto rounded-lg border border-accent bg-background p-4 text-xs text-muted-foreground">
+              {JSON.stringify(response.claim_metadata, null, 2)}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   );

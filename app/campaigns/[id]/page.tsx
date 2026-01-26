@@ -84,6 +84,32 @@ export default function CampaignDetailPage() {
     })();
   }, [id, orgId]);
 
+  // Realtime: new claims for this campaign show up without refresh
+  useEffect(() => {
+    if (!id) return;
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`campaign-responses-${id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "responses",
+          filter: `campaign_id=eq.${id}`,
+        },
+        (payload: { new: ResponseRow }) => {
+          const row = payload.new;
+          if (orgId != null && (row as { organization_id?: string | null }).organization_id !== orgId) return;
+          setResponses((prev) => [row as ResponseRow, ...prev]);
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [id, orgId]);
+
   const addQuestion = () => {
     if (questions.length >= MAX_QUESTIONS) return;
     setQuestions((q) => [...q, ""]);

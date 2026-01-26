@@ -8,11 +8,38 @@ import { createClient } from "@/lib/supabase";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
 
 const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
+import {
+  bulkAssignTokensToSchool,
+  getRolePermissions,
+  setRolePermission,
+  ROLE_PERMISSION_KEYS,
+  CONTROLLABLE_ROLES,
+  type RolePermissionRow,
+} from "@/app/actions";
 import type { Campaign, TokenWithCampaign } from "@/types";
 import type { CampaignQuestion } from "@/types";
 import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
 
-type Tab = "map" | "fleet" | "campaigns";
+type Organization = { id: string; name: string };
+
+type Tab = "map" | "fleet" | "campaigns" | "settings";
+
+/** Effective write flags for current user. SUPER_ADMIN = all true; else from role_permissions. */
+function getEffectivePermissions(
+  userRole: string | undefined,
+  rows: RolePermissionRow[]
+): { fleetWrite: boolean; campaignsWrite: boolean; mapReset: boolean } {
+  if (userRole === "SUPER_ADMIN") {
+    return { fleetWrite: true, campaignsWrite: true, mapReset: true };
+  }
+  const map = new Map<string, boolean>();
+  rows.forEach((r) => map.set(`${r.role}:${r.permission_key}`, r.enabled));
+  return {
+    fleetWrite: map.get(`${userRole}:fleet_write`) ?? false,
+    campaignsWrite: map.get(`${userRole}:campaigns_write`) ?? false,
+    mapReset: map.get(`${userRole}:map_reset`) ?? false,
+  };
+}
 
 const MAX_QUESTIONS = 10;
 
@@ -48,8 +75,34 @@ export default function AdminDashboard() {
   const [responsesCount, setResponsesCount] = useState<number>(0);
   const [selectedTokenIds, setSelectedTokenIds] = useState<Set<string>>(new Set());
   const [targetCampaignId, setTargetCampaignId] = useState("");
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [targetSchoolId, setTargetSchoolId] = useState("");
+  const [assignToSchoolMessage, setAssignToSchoolMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionRow[]>([]);
 
   const supabase = createClient();
+  const effectivePermissions = getEffectivePermissions(userRole, rolePermissions);
+
+  // Fetch role_permissions for permission-based UI (all admins need to know their write access)
+  useEffect(() => {
+    if (!isAdminRole(userRole)) return;
+    getRolePermissions().then(setRolePermissions);
+  }, [userRole]);
+
+  // Fetch all schools (organizations) for SUPER_ADMIN bulk-assign dropdown
+  useEffect(() => {
+    if (userRole !== "SUPER_ADMIN") return;
+    let cancelled = false;
+    const client = createClient();
+    client
+      .from("organizations")
+      .select("id, name")
+      .order("name")
+      .then(({ data }) => {
+        if (!cancelled && data) setOrganizations((data as Organization[]) ?? []);
+      });
+    return () => { cancelled = true; };
+  }, [userRole]);
 
   // Fetch organization name when we have orgId and need it for display (STUDENT or ORG_ADMIN/AUDITOR)
   useEffect(() => {
@@ -122,6 +175,78 @@ export default function AdminDashboard() {
     loadData();
   }, [loadData]);
 
+  // Realtime: keep Fleet, Stats, and Map in sync when tokens or responses change (no refresh needed)
+  useEffect(() => {
+    if (!isAdminRole(userRole)) return;
+    const channel = supabase
+      .channel("dashboard-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "tokens",
+          ...(orgId != null ? { filter: `organization_id=eq.${orgId}` } : {}),
+        },
+        (payload: { new: Record<string, unknown> }) => {
+          const row = payload.new;
+          const incomingOrgId = row.organization_id as string | null | undefined;
+          if (orgId != null && incomingOrgId !== orgId) return;
+          setTokens((prev) => {
+            const next = normalizeTokensWithCampaign([row]);
+            const token = next[0];
+            if (!token) return prev;
+            const idx = prev.findIndex((t) => t.id === token.id);
+            if (idx >= 0) {
+              const out = [...prev];
+              out[idx] = { ...token, campaigns: prev[idx].campaigns ?? null };
+              return out;
+            }
+            return [...prev, token];
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "tokens",
+          ...(orgId != null ? { filter: `organization_id=eq.${orgId}` } : {}),
+        },
+        (payload: { new: Record<string, unknown> }) => {
+          const row = payload.new;
+          const incomingOrgId = row.organization_id as string | null | undefined;
+          if (orgId != null && incomingOrgId !== orgId) return;
+          setTokens((prev) => {
+            const next = normalizeTokensWithCampaign([row]);
+            const token = next[0];
+            if (!token || prev.some((t) => t.id === token.id)) return prev;
+            return [...prev, token];
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "responses",
+          ...(orgId != null ? { filter: `organization_id=eq.${orgId}` } : {}),
+        },
+        (payload: { new: { organization_id?: string | null } }) => {
+          const row = payload.new;
+          if (orgId != null && row.organization_id !== orgId) return;
+          setResponsesCount((c) => c + 1);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userRole, orgId, supabase]);
+
   async function assignTokens() {
     if (!targetCampaignId || selectedTokenIds.size === 0) return;
     const { error } = await supabase
@@ -131,6 +256,19 @@ export default function AdminDashboard() {
     if (!error) {
       setSelectedTokenIds(new Set());
       loadData();
+    }
+  }
+
+  async function assignTokensToSchool() {
+    if (!targetSchoolId.trim() || selectedTokenIds.size === 0) return;
+    setAssignToSchoolMessage(null);
+    const result = await bulkAssignTokensToSchool(Array.from(selectedTokenIds), targetSchoolId);
+    if (result.success) {
+      setAssignToSchoolMessage({ type: "success", text: `${result.count} token(s) assigned to school.` });
+      setSelectedTokenIds(new Set());
+      loadData();
+    } else {
+      setAssignToSchoolMessage({ type: "error", text: result.error });
     }
   }
 
@@ -276,6 +414,16 @@ export default function AdminDashboard() {
           >
             CAMPAIGNS
           </button>
+          {userRole === "SUPER_ADMIN" && (
+            <button
+              onClick={() => setActiveTab("settings")}
+              className={`rounded-md px-6 py-2 transition ${
+                activeTab === "settings" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              SETTINGS
+            </button>
+          )}
         </div>
         <div className="flex w-32 items-center justify-end gap-4 font-mono text-xs uppercase text-muted-foreground">
           <button
@@ -296,8 +444,8 @@ export default function AdminDashboard() {
           responsesCount={responsesCount}
         />
         {activeTab === "map" && (
-          <div className="h-[calc(100vh-72px-8rem)] min-h-[420px] w-full">
-            <MapView />
+          <div className="flex w-full flex-1 flex-col min-h-[480px]" style={{ height: "calc(100vh - 72px - 8rem)" }}>
+            <MapView mapboxToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN} canReset={effectivePermissions.mapReset} />
           </div>
         )}
 
@@ -312,6 +460,13 @@ export default function AdminDashboard() {
             onAssign={assignTokens}
             onRefresh={loadData}
             orgId={orgId}
+            userRole={userRole}
+            organizations={organizations}
+            targetSchoolId={targetSchoolId}
+            setTargetSchoolId={setTargetSchoolId}
+            onAssignToSchool={assignTokensToSchool}
+            assignToSchoolMessage={assignToSchoolMessage}
+            fleetWrite={effectivePermissions.fleetWrite}
           />
         )}
 
@@ -321,6 +476,14 @@ export default function AdminDashboard() {
             onRefresh={loadData}
             supabase={supabase}
             orgId={orgId}
+            campaignsWrite={effectivePermissions.campaignsWrite}
+          />
+        )}
+
+        {activeTab === "settings" && userRole === "SUPER_ADMIN" && (
+          <SettingsTab
+            rolePermissions={rolePermissions}
+            onRefresh={() => getRolePermissions().then(setRolePermissions)}
           />
         )}
       </main>
@@ -441,6 +604,13 @@ function FleetTab({
   onAssign,
   onRefresh,
   orgId,
+  userRole,
+  organizations,
+  targetSchoolId,
+  setTargetSchoolId,
+  onAssignToSchool,
+  assignToSchoolMessage,
+  fleetWrite,
 }: {
   tokens: TokenWithCampaign[];
   campaigns: Campaign[];
@@ -451,6 +621,13 @@ function FleetTab({
   onAssign: () => void;
   onRefresh: () => void;
   orgId: string | null;
+  userRole: string | undefined;
+  organizations: Organization[];
+  targetSchoolId: string;
+  setTargetSchoolId: (id: string) => void;
+  onAssignToSchool: () => void;
+  assignToSchoolMessage: { type: "success" | "error"; text: string } | null;
+  fleetWrite: boolean;
 }) {
   const toggleOne = (id: string) => {
     const next = new Set(selectedTokenIds);
@@ -461,31 +638,61 @@ function FleetTab({
   const toggleAll = (checked: boolean) => {
     setSelectedTokenIds(checked ? new Set(tokens.map((t) => t.id)) : new Set());
   };
+  const isSuperAdmin = userRole === "SUPER_ADMIN";
+  const showFleetWrite = fleetWrite || isSuperAdmin;
 
   return (
     <div className="mx-auto max-w-7xl p-8">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <h2 className="text-2xl font-bold">Fleet Management</h2>
-        <div className="flex gap-4">
-          <select
-            value={targetCampaignId}
-            onChange={(e) => setTargetCampaignId(e.target.value)}
-            className="rounded border border-accent bg-muted p-2 text-sm"
-          >
-            <option value="">Select Campaign to Assign...</option>
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={onAssign}
-            disabled={!targetCampaignId || selectedTokenIds.size === 0}
-            className="rounded bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-50"
-          >
-            BULK ASSIGN
-          </button>
+        <div className="flex flex-wrap gap-4">
+          {showFleetWrite && (
+            <>
+              <select
+                value={targetCampaignId}
+                onChange={(e) => setTargetCampaignId(e.target.value)}
+                className="rounded border border-accent bg-muted p-2 text-sm"
+              >
+                <option value="">Select Campaign to Assign...</option>
+                {campaigns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={onAssign}
+                disabled={!targetCampaignId || selectedTokenIds.size === 0}
+                className="rounded bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-50"
+              >
+                BULK ASSIGN
+              </button>
+            </>
+          )}
+          {isSuperAdmin && (
+            <>
+              <select
+                value={targetSchoolId}
+                onChange={(e) => setTargetSchoolId(e.target.value)}
+                className="rounded border border-accent bg-muted p-2 text-sm"
+                title="Assign selected tokens to a school"
+              >
+                <option value="">Select School...</option>
+                {organizations.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={onAssignToSchool}
+                disabled={!targetSchoolId || selectedTokenIds.size === 0}
+                className="rounded border-2 border-primary bg-primary/10 px-4 py-2 text-sm font-bold text-primary hover:bg-primary/20 disabled:opacity-50"
+              >
+                ASSIGN TO SCHOOL
+              </button>
+            </>
+          )}
           <button
             onClick={onRefresh}
             className="rounded border border-accent px-4 py-2 text-sm"
@@ -494,6 +701,18 @@ function FleetTab({
           </button>
         </div>
       </div>
+
+      {assignToSchoolMessage && (
+        <div
+          className={`mb-4 rounded border px-4 py-2 text-sm ${
+            assignToSchoolMessage.type === "success"
+              ? "border-success bg-success/10 text-success"
+              : "border-destructive bg-destructive/10 text-destructive"
+          }`}
+        >
+          {assignToSchoolMessage.text}
+        </div>
+      )}
 
       <table className="w-full border-collapse text-left">
         <thead className="border-b border-accent text-xs uppercase text-muted-foreground">
@@ -546,11 +765,13 @@ function CampaignsTab({
   onRefresh,
   supabase,
   orgId,
+  campaignsWrite,
 }: {
   campaigns: Campaign[];
   onRefresh: () => void;
   supabase: ReturnType<typeof createClient>;
   orgId: string | null;
+  campaignsWrite: boolean;
 }) {
   const [name, setName] = useState("");
   const [questions, setQuestions] = useState<string[]>([""]);
@@ -598,6 +819,7 @@ function CampaignsTab({
 
   return (
     <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 p-8 md:grid-cols-3">
+      {campaignsWrite && (
       <div className="h-fit rounded-xl border border-accent bg-muted p-6">
         <h2 className="mb-4 text-xl font-bold">Create Campaign</h2>
         <div className="space-y-4">
@@ -671,6 +893,7 @@ function CampaignsTab({
           </button>
         </div>
       </div>
+      )}
 
       <div className="space-y-4 md:col-span-2">
         <h2 className="text-xl font-bold">Active Surveys</h2>
@@ -695,6 +918,77 @@ function CampaignsTab({
               {questionCount(c)} custom →
             </div>
           </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const PERMISSION_LABELS: Record<string, string> = {
+  fleet_write: "Fleet write (bulk assign campaign)",
+  campaigns_write: "Campaigns write (create / edit)",
+  map_reset: "Map reset (reset simulation)",
+};
+
+function SettingsTab({
+  rolePermissions,
+  onRefresh,
+}: {
+  rolePermissions: RolePermissionRow[];
+  onRefresh: () => void;
+}) {
+  const [updating, setUpdating] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  const getEnabled = (role: string, key: string) =>
+    rolePermissions.some((r) => r.role === role && r.permission_key === key && r.enabled);
+
+  const handleToggle = async (role: string, permissionKey: string, enabled: boolean) => {
+    const id = `${role}:${permissionKey}`;
+    setUpdating(id);
+    setSavedId(null);
+    const result = await setRolePermission(role, permissionKey, enabled);
+    setUpdating(null);
+    if (result.success) {
+      onRefresh();
+      setSavedId(id);
+      setTimeout(() => setSavedId(null), 2000);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-4xl p-8">
+      <h2 className="mb-2 text-2xl font-bold">Role permissions</h2>
+      <p className="mb-8 text-sm text-muted-foreground">
+        Turn on or off write access for each profile. All org profiles can see fleet, campaigns, and map data; these toggles control who can change things. SUPER_ADMIN always has full access.
+      </p>
+      <div className="space-y-8">
+        {CONTROLLABLE_ROLES.map((role) => (
+          <div key={role} className="rounded-xl border border-accent bg-muted p-6">
+            <h3 className="mb-4 font-mono text-sm font-bold uppercase text-primary">{role}</h3>
+            <div className="flex flex-wrap gap-6">
+              {ROLE_PERMISSION_KEYS.map((key) => {
+                const id = `${role}:${key}`;
+                const enabled = getEnabled(role, key);
+                return (
+                  <label key={id} className="flex cursor-pointer items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      disabled={updating === id}
+                      onChange={(e) => handleToggle(role, key, e.target.checked)}
+                      className="h-4 w-4 rounded border-accent"
+                    />
+                    <span className="text-sm">{PERMISSION_LABELS[key] ?? key}</span>
+                    {updating === id && <span className="text-xs text-muted-foreground">Saving…</span>}
+                    {savedId === id && updating !== id && (
+                      <span className="text-xs font-medium text-success">Saved</span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
         ))}
       </div>
     </div>
