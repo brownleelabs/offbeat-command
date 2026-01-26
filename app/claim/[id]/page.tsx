@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
+import { submitClaim } from "@/app/actions";
 import {
   CAMPAIGN_REQUIRED_FIELDS,
   type Campaign,
@@ -90,13 +91,10 @@ export default function ClaimPage() {
     setSubmitPhase("location");
     setErrorMsg("");
 
-    const supabase = createClient();
-
     try {
       const coords = await getCurrentPositionAsync();
       setSubmitPhase("saving");
 
-      const campaignId = campaign?.id ?? null;
       const questions = Array.isArray(campaign?.questions) ? campaign.questions : [];
       const customAnswersArray = questions.map((q: CampaignQuestion) => ({
         order: q.order,
@@ -104,33 +102,18 @@ export default function ClaimPage() {
         answer: customAnswers[q.order]?.trim() ?? "",
       }));
 
-      const { error: insertError } = await supabase.from("responses").insert({
-        token_id: tokenId,
-        campaign_id: campaignId,
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        student_id: studentId.trim(),
-        student_email: studentEmail.trim(),
-        venmo_username: venmoUsername.trim(),
-        custom_answers: customAnswersArray,
+      await submitClaim({
+        tokenId,
+        campaignId: campaign?.id ?? null,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        studentId: studentId.trim(),
+        studentEmail: studentEmail.trim(),
+        venmoUsername: venmoUsername.trim(),
+        customAnswers: customAnswersArray,
+        lat: coords?.lat ?? null,
+        lng: coords?.lng ?? null,
       });
-
-      if (insertError) throw insertError;
-
-      const tokenUpdate: { status: "found"; lat?: number; lng?: number } = {
-        status: "found",
-      };
-      if (coords) {
-        tokenUpdate.lat = coords.lat;
-        tokenUpdate.lng = coords.lng;
-      }
-
-      const { error: updateError } = await supabase
-        .from("tokens")
-        .update(tokenUpdate)
-        .eq("id", tokenId);
-
-      if (updateError) throw updateError;
 
       setStatus("success");
     } catch (err: unknown) {
