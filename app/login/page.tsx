@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -25,10 +23,10 @@ export default function LoginPage() {
       if (err) {
         setError(err.message);
       } else {
-        // CRITICAL FIX: Refresh session state before navigation so cookie is ready for Dashboard
+        // Refresh session so cookie is written, then full redirect so dashboard gets it
         await supabase.auth.refreshSession();
-        router.push("/");
-        router.refresh();
+        window.location.href = "/";
+        return;
       }
     } catch {
       setError("Something went wrong. Try again.");

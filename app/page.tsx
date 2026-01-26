@@ -161,12 +161,23 @@ export default function AdminDashboard() {
               the auth session. Try: open this site in a private/incognito window, or
               disable that extension for this site, then sign in again.
             </p>
-            <a
-              href="/login"
-              className="rounded border border-zinc-700 px-4 py-2 hover:bg-zinc-800"
-            >
-              SIGN IN AGAIN
-            </a>
+            <div className="flex flex-col items-center gap-3 sm:flex-row">
+              <a
+                href="/login"
+                className="rounded border border-zinc-700 px-4 py-2 hover:bg-zinc-800"
+              >
+                SIGN IN AGAIN
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = "/";
+                }}
+                className="rounded border border-zinc-600 px-4 py-2 text-zinc-300 hover:bg-zinc-800"
+              >
+                Try full page reload
+              </button>
+            </div>
           </>
         ) : (
           <>
