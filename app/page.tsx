@@ -10,6 +10,23 @@ type Tab = "map" | "fleet" | "campaigns";
 
 const MAX_QUESTIONS = 10;
 
+/** Normalize raw token rows so Fleet tab always has TokenWithCampaign shape (lat/lng, campaigns). */
+function normalizeTokensWithCampaign(rows: unknown[]): TokenWithCampaign[] {
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    const lat = (r.lat as number) ?? (r.latitude as number) ?? 0;
+    const lng = (r.lng as number) ?? (r.longitude as number) ?? 0;
+    return {
+      id: String(r.id),
+      lat: Number(lat),
+      lng: Number(lng),
+      status: (r.status === "found" ? "found" : "active") as "active" | "found",
+      campaign_id: (r.campaign_id as string) ?? null,
+      campaigns: (r.campaigns as { name: string } | null) ?? null,
+    };
+  });
+}
+
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>("map");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -30,16 +47,23 @@ export default function AdminDashboard() {
       .order("created_at", { ascending: false });
     setCampaigns((cData as Campaign[]) ?? []);
 
-    // Relational join: tokens.campaign_id → campaigns.id; returns campaigns: { name }
+    // Load tokens: try with campaign join first; fall back to tokens-only if join fails
     const { data: tData, error } = await supabase
       .from("tokens")
       .select("*, campaigns(name)")
       .order("id");
-    if (error) {
-      console.error("Fleet load error:", error);
+    if (!error && tData) {
+      setTokens(normalizeTokensWithCampaign(tData));
       return;
     }
-    setTokens((tData as TokenWithCampaign[]) ?? []);
+    if (error) {
+      console.warn("Fleet join failed, loading tokens only:", error.message);
+    }
+    const { data: tokensOnly } = await supabase
+      .from("tokens")
+      .select("*")
+      .order("id");
+    setTokens(normalizeTokensWithCampaign(tokensOnly ?? []));
   }
 
   async function assignTokens() {
