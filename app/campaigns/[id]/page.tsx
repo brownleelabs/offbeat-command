@@ -282,9 +282,19 @@ export default function CampaignDetailPage() {
                   </tr>
                 )}
                 {responses.map((r) => (
-                  <tr key={r.id} className="hover:bg-white/5">
-                    <td className="p-4 font-bold">
-                      {r.first_name ?? ""} {r.last_name ?? ""}
+                  <tr
+                    key={r.id}
+                    onClick={() => router.push(`/responses/${r.id}`)}
+                    className="cursor-pointer transition-colors hover:bg-white/5"
+                  >
+                    <td className="p-4">
+                      <Link
+                        href={`/responses/${r.id}`}
+                        className="block font-bold hover:text-blue-400"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {r.first_name ?? ""} {r.last_name ?? ""}
+                      </Link>
                     </td>
                     <td className="p-4 text-zinc-400">{r.student_id ?? "—"}</td>
                     <td className="p-4 text-blue-400">
