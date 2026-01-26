@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase";
 import MapView from "@/components/map-view";
 import type { Campaign, TokenWithCampaign } from "@/types";
@@ -386,9 +387,10 @@ function CampaignsTab({
           <p className="text-sm italic text-gray-500">No campaigns yet.</p>
         )}
         {campaigns.map((c) => (
-          <div
+          <Link
             key={c.id}
-            className="flex justify-between rounded-lg border border-gray-800 bg-gray-900 p-4"
+            href={`/campaigns/${c.id}`}
+            className="flex justify-between rounded-lg border border-gray-800 bg-gray-900 p-4 transition hover:border-gray-700 hover:bg-gray-800/50"
           >
             <div>
               <span className="font-bold">{c.name}</span>
@@ -399,9 +401,9 @@ function CampaignsTab({
               </p>
             </div>
             <div className="text-right text-sm font-bold text-blue-400">
-              {questionCount(c)} custom
+              {questionCount(c)} custom →
             </div>
-          </div>
+          </Link>
         ))}
       </div>
     </div>
