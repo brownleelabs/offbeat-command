@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
+import { useDashboard } from "@/components/dashboard-context";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import type { Campaign, CampaignQuestion } from "@/types";
 import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
@@ -22,6 +23,7 @@ type ResponseRow = {
 export default function CampaignDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { orgId } = useDashboard();
   const id = typeof params.id === "string" ? params.id : params.id?.[0] ?? "";
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,11 +40,11 @@ export default function CampaignDetailPage() {
     if (!id) return;
     const supabase = createClient();
     (async () => {
-      const { data, error } = await supabase
-        .from("campaigns")
-        .select("*")
-        .eq("id", id)
-        .single();
+      let query = supabase.from("campaigns").select("*").eq("id", id);
+      if (orgId != null) {
+        query = query.eq("organization_id", orgId);
+      }
+      const { data, error } = await query.single();
       if (error || !data) {
         setNotFound(true);
         setCampaign(null);
@@ -63,20 +65,24 @@ export default function CampaignDetailPage() {
       );
       setLoading(false);
     })();
-  }, [id]);
+  }, [id, orgId]);
 
   useEffect(() => {
     if (!id) return;
     const supabase = createClient();
     (async () => {
-      const { data } = await supabase
+      let query = supabase
         .from("responses")
         .select("*")
         .eq("campaign_id", id)
         .order("created_at", { ascending: false });
+      if (orgId != null) {
+        query = query.eq("organization_id", orgId);
+      }
+      const { data } = await query;
       setResponses((data as ResponseRow[]) ?? []);
     })();
-  }, [id]);
+  }, [id, orgId]);
 
   const addQuestion = () => {
     if (questions.length >= MAX_QUESTIONS) return;
