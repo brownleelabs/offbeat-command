@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Offbeat Command",
+  title: "Campus Mobility Project Control Center",
   description: "Token yield map",
 };
 

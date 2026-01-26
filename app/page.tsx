@@ -243,7 +243,7 @@ export default function AdminDashboard() {
       )}
       <nav className="sticky top-0 z-50 flex items-center justify-between border-b border-accent bg-muted px-8 py-4">
         <h1 className="text-xl font-bold tracking-tighter text-primary">
-          OFFBEAT COMMAND
+          Campus Mobility Project Control Center
         </h1>
         <div className="flex rounded-lg border border-accent bg-background p-1">
           <button
