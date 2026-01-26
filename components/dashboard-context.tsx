@@ -68,27 +68,55 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
 
     async function fetchProfile() {
       try {
+        // Hydrate session from cookies first (helps after redirect with @supabase/ssr)
+        await supabase.auth.getSession();
+
         const {
           data: { user },
           error: authError,
         } = await supabase.auth.getUser();
         if (cancelled) return;
-        if (authError || !user) {
+
+        if (authError) {
+          console.warn("[DashboardContext] Auth error:", authError.message);
           setProfile(null);
           setLoading(false);
           return;
         }
+        if (!user) {
+          console.warn("[DashboardContext] No auth user");
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+
+        console.log("[DashboardContext] Auth user id:", user.id, "email:", user.email);
+
         const { data, error } = await supabase
           .from("profiles")
           .select("id, email, role, organization_id")
           .eq("id", user.id)
           .single();
+
         if (cancelled) return;
-        if (error || !data) {
+
+        if (error) {
+          console.error("[DashboardContext] Profiles fetch error:", {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+          });
           setProfile(null);
           setLoading(false);
           return;
         }
+        if (!data) {
+          console.warn("[DashboardContext] Profiles fetch: no data (0 rows)");
+          setProfile(null);
+          setLoading(false);
+          return;
+        }
+
         const raw = data as Record<string, unknown>;
         const role = isUserRole(raw.role) ? raw.role : "STUDENT";
         setProfile({
@@ -97,8 +125,11 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
           role,
           organization_id: raw.organization_id != null ? String(raw.organization_id) : null,
         });
-      } catch {
-        if (!cancelled) setProfile(null);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("[DashboardContext] Fetch profile exception:", err);
+          setProfile(null);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
