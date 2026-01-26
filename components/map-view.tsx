@@ -96,15 +96,15 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
   const canShowMap = !!mapboxToken;
 
   return (
-    <div className="relative h-full min-h-[300px] w-full bg-background">
-      {/* --- THE MAP (needs token and a sized container) --- */}
-      <div className="absolute inset-0">
+    <div className="relative h-full min-h-[400px] w-full bg-background">
+      {/* --- THE MAP (needs token and a sized container so mapbox-gl gets real dimensions) --- */}
+      <div className="absolute inset-0 min-h-[400px]">
         {canShowMap ? (
           <Map
             initialViewState={INITIAL_VIEW_STATE}
             mapboxAccessToken={mapboxToken}
             mapStyle="mapbox://styles/mapbox/dark-v11"
-            style={{ width: "100%", height: "100%" }}
+            style={{ width: "100%", height: "100%", minHeight: 400 }}
             attributionControl={false}
           >
             {tokens.map((t) => (

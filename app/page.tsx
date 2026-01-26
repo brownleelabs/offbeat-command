@@ -294,7 +294,7 @@ export default function AdminDashboard() {
           responsesCount={responsesCount}
         />
         {activeTab === "map" && (
-          <div className="h-[calc(100vh-72px-8rem)] w-full">
+          <div className="h-[calc(100vh-72px-8rem)] min-h-[420px] w-full">
             <MapView />
           </div>
         )}

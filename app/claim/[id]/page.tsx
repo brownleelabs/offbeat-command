@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
-import { createClient } from "@/lib/supabase";
-import { submitClaim } from "@/app/actions";
+import { getTokenForClaim, submitClaim } from "@/app/actions";
 import {
   CAMPAIGN_REQUIRED_FIELDS,
   type Campaign,
@@ -51,34 +50,17 @@ export default function ClaimPage() {
   useEffect(() => {
     const rawId = (params.id as string) ?? "";
     if (!rawId) return;
-    const id = rawId.replace(/%20/g, "").trim();
-    setTokenId(id);
-
-    const supabase = createClient();
 
     (async () => {
-      const { data: token, error: tokenError } = await supabase
-        .from("tokens")
-        .select("id, campaign_id")
-        .eq("id", id)
-        .single();
-
-      if (tokenError || !token) {
+      const result = await getTokenForClaim(rawId);
+      if (!result) {
         setStatus("error");
         setErrorMsg("Token not found. Check the link and try again.");
         return;
       }
-
-      const campaignId = (token as { campaign_id: string | null }).campaign_id;
-      if (campaignId) {
-        const { data: camp } = await supabase
-          .from("campaigns")
-          .select("*")
-          .eq("id", campaignId)
-          .single();
-        setCampaign((camp as Campaign) ?? null);
-      }
-
+      const id = (result.token as { id: string }).id;
+      setTokenId(id);
+      if (result.campaign) setCampaign(result.campaign as Campaign);
       setStatus("form");
     })();
   }, [params.id]);

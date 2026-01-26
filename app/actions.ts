@@ -64,6 +64,37 @@ export type SubmitClaimInput = {
   lng?: number | null
 }
 
+/** Load token + campaign for claim page. Uses service role so anonymous users can open the claim form. */
+export async function getTokenForClaim(tokenId: string) {
+  const supabase = getSupabaseService()
+  const id = tokenId.replace(/%20/g, '').trim()
+  if (!id) return null
+
+  const { data: token, error: tokenErr } = await supabase
+    .from('tokens')
+    .select('id, campaign_id')
+    .eq('id', id)
+    .single()
+
+  if (tokenErr || !token) {
+    console.warn('getTokenForClaim token:', tokenErr?.message)
+    return null
+  }
+
+  const campaignId = (token as { campaign_id: string | null }).campaign_id
+  let campaign: unknown = null
+  if (campaignId) {
+    const { data: camp } = await supabase
+      .from('campaigns')
+      .select('*')
+      .eq('id', campaignId)
+      .single()
+    campaign = camp
+  }
+
+  return { token: { id: (token as { id: string }).id, campaign_id: campaignId }, campaign }
+}
+
 /** Submit claim form (anonymous). Uses service role so unauthenticated students can claim. */
 export async function submitClaim(input: SubmitClaimInput) {
   const supabase = getSupabaseService()
