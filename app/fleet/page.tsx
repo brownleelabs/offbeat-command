@@ -25,6 +25,7 @@ export default function FleetPage() {
     const { data } = await supabase
       .from("campaigns")
       .select("id, name")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false });
     setCampaigns((data as CampaignRow[]) ?? []);
   }

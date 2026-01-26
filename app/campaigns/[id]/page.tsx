@@ -116,10 +116,16 @@ export default function CampaignDetailPage() {
     if (!id) return;
     const supabase = createClient();
     setDeleting(true);
-    const { error } = await supabase.from("campaigns").delete().eq("id", id);
+    const { error } = await supabase
+      .from("campaigns")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id);
     setDeleting(false);
     if (!error) {
       router.push("/");
+    } else {
+      console.error("Archive failed:", error);
+      alert("Could not archive campaign.");
     }
   }
 
@@ -238,7 +244,7 @@ export default function CampaignDetailPage() {
                   disabled={deleting}
                   className="rounded bg-red-600 px-4 py-2 font-bold text-white disabled:opacity-50"
                 >
-                  {deleting ? "Deleting..." : "Yes, delete"}
+                  {deleting ? "Archiving..." : "Yes, archive"}
                 </button>
                 <button
                   onClick={() => setConfirmDelete(false)}
@@ -253,7 +259,7 @@ export default function CampaignDetailPage() {
                 className="flex items-center gap-2 rounded border border-red-500/50 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10"
               >
                 <Trash2 className="h-4 w-4" />
-                Delete campaign
+                Archive campaign
               </button>
             )}
           </div>

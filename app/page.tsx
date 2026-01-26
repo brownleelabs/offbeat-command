@@ -46,6 +46,7 @@ export default function AdminDashboard() {
     const { data: cData } = await supabase
       .from("campaigns")
       .select("*")
+      .is("deleted_at", null)
       .order("created_at", { ascending: false });
     setCampaigns((cData as Campaign[]) ?? []);
 
