@@ -10,6 +10,15 @@ import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
 
 const MAX_QUESTIONS = 10;
 
+type ResponseRow = {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  student_id: string | null;
+  venmo_username: string | null;
+  created_at: string;
+};
+
 export default function CampaignDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -17,6 +26,7 @@ export default function CampaignDetailPage() {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [responses, setResponses] = useState<ResponseRow[]>([]);
 
   const [name, setName] = useState("");
   const [questions, setQuestions] = useState<string[]>([]);
@@ -52,6 +62,19 @@ export default function CampaignDetailPage() {
           : [""]
       );
       setLoading(false);
+    })();
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    const supabase = createClient();
+    (async () => {
+      const { data } = await supabase
+        .from("responses")
+        .select("*")
+        .eq("campaign_id", id)
+        .order("created_at", { ascending: false });
+      setResponses((data as ResponseRow[]) ?? []);
     })();
   }, [id]);
 
@@ -233,6 +256,51 @@ export default function CampaignDetailPage() {
                 Delete campaign
               </button>
             )}
+          </div>
+        </div>
+
+        <div className="mt-12 border-t border-white/10 pt-8">
+          <h2 className="mb-4 text-xl font-bold uppercase tracking-widest text-green-500">
+            Live Response Ledger
+          </h2>
+          <div className="overflow-hidden rounded-xl border border-white/5 bg-zinc-900/30">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-white/5 font-black uppercase text-zinc-500">
+                <tr>
+                  <th className="p-4">Student</th>
+                  <th className="p-4">Student ID</th>
+                  <th className="p-4">Venmo</th>
+                  <th className="p-4">Timestamp</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {responses.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="p-4 text-zinc-500">
+                      No responses yet.
+                    </td>
+                  </tr>
+                )}
+                {responses.map((r) => (
+                  <tr key={r.id} className="hover:bg-white/5">
+                    <td className="p-4 font-bold">
+                      {r.first_name ?? ""} {r.last_name ?? ""}
+                    </td>
+                    <td className="p-4 text-zinc-400">{r.student_id ?? "—"}</td>
+                    <td className="p-4 text-blue-400">
+                      {r.venmo_username
+                        ? `@${(r.venmo_username ?? "").replace(/^@/, "")}`
+                        : "—"}
+                    </td>
+                    <td className="p-4 text-zinc-500">
+                      {r.created_at
+                        ? new Date(r.created_at).toLocaleString()
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

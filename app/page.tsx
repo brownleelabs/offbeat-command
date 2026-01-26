@@ -193,7 +193,7 @@ function FleetTab({
           </select>
           <button
             onClick={onAssign}
-            disabled={selectedTokenIds.size === 0}
+            disabled={!targetCampaignId || selectedTokenIds.size === 0}
             className="rounded bg-blue-600 px-4 py-2 text-sm font-bold disabled:opacity-50"
           >
             BULK ASSIGN
