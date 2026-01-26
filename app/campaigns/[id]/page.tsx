@@ -131,16 +131,16 @@ export default function CampaignDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-black text-zinc-500">
+      <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
         Loading campaign...
       </div>
     );
   }
   if (notFound || !campaign) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-black text-white">
-        <p className="text-zinc-400">Campaign not found.</p>
-        <Link href="/" className="text-blue-400 hover:underline">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background text-foreground">
+        <p className="text-muted-foreground">Campaign not found.</p>
+        <Link href="/" className="text-primary hover:underline">
           ← Back to dashboard
         </Link>
       </div>
@@ -154,52 +154,52 @@ export default function CampaignDetailPage() {
       : CAMPAIGN_REQUIRED_FIELDS;
 
   return (
-    <div className="min-h-screen bg-black p-8 text-white">
+    <div className="min-h-screen bg-background p-8 text-foreground">
       <div className="mx-auto max-w-3xl">
         <Link
           href="/"
-          className="mb-6 inline-flex items-center gap-2 text-sm text-zinc-400 hover:text-white"
+          className="mb-6 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to dashboard
         </Link>
 
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-6">
+        <div className="rounded-xl border border-accent bg-muted p-6">
           <h1 className="mb-6 text-2xl font-bold">Edit Campaign</h1>
-          <p className="mb-6 font-mono text-xs text-zinc-500">{campaign.id}</p>
+          <p className="mb-6 font-mono text-xs text-muted-foreground">{campaign.id}</p>
 
           {/* Required fields (read-only) */}
-          <div className="mb-6 rounded-lg border border-emerald-500/30 bg-black/40 p-3">
-            <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-emerald-400">
+          <div className="mb-6 rounded-lg border border-success/30 bg-background/95 p-3">
+            <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-success">
               Required fields (reward payout)
             </h2>
-            <ul className="space-y-1.5 text-sm text-zinc-300">
+            <ul className="space-y-1.5 text-sm text-accent">
               {displayRequired.map((f) => (
                 <li key={f.key} className="flex items-center gap-2">
-                  <span className="text-emerald-500">✓</span>
+                  <span className="text-success">✓</span>
                   {f.label}
                 </li>
               ))}
             </ul>
           </div>
 
-          <label className="mb-1 block text-sm text-gray-400">Campaign name</label>
+          <label className="mb-1 block text-sm text-muted-foreground">Campaign name</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="mb-6 w-full rounded border border-gray-700 bg-black px-3 py-2 text-sm"
+            className="mb-6 w-full rounded border border-accent bg-background px-3 py-2 text-sm"
           />
 
           <div className="mb-2 flex items-center justify-between">
-            <label className="text-sm text-gray-400">
+            <label className="text-sm text-muted-foreground">
               Additional questions (up to {MAX_QUESTIONS})
             </label>
             {questions.length < MAX_QUESTIONS && (
               <button
                 type="button"
                 onClick={addQuestion}
-                className="text-xs text-blue-400 hover:underline"
+                className="text-xs text-primary hover:underline"
               >
                 + Add question
               </button>
@@ -213,13 +213,13 @@ export default function CampaignDetailPage() {
                   value={q}
                   onChange={(e) => setQuestion(i, e.target.value)}
                   placeholder={`Question ${i + 1}`}
-                  className="flex-1 rounded border border-gray-700 bg-black px-3 py-2 text-sm"
+                  className="flex-1 rounded border border-accent bg-background px-3 py-2 text-sm"
                 />
                 {questions.length > 1 && (
                   <button
                     type="button"
                     onClick={() => removeQuestion(i)}
-                    className="text-red-400 hover:underline"
+                    className="text-destructive hover:underline"
                     aria-label="Remove question"
                   >
                     ×
@@ -229,11 +229,11 @@ export default function CampaignDetailPage() {
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 border-t border-gray-800 pt-6">
+          <div className="flex flex-wrap items-center gap-4 border-t border-accent pt-6">
             <button
               onClick={handleSave}
               disabled={saving || !name.trim()}
-              className="rounded bg-blue-600 px-4 py-2 font-bold disabled:opacity-50"
+              className="rounded bg-primary px-4 py-2 font-bold text-primary-foreground disabled:opacity-50"
             >
               {saving ? "Saving..." : "Save changes"}
             </button>
@@ -242,13 +242,13 @@ export default function CampaignDetailPage() {
                 <button
                   onClick={handleDelete}
                   disabled={deleting}
-                  className="rounded bg-red-600 px-4 py-2 font-bold text-white disabled:opacity-50"
+                  className="rounded bg-destructive px-4 py-2 font-bold text-destructive-foreground disabled:opacity-50"
                 >
                   {deleting ? "Archiving..." : "Yes, archive"}
                 </button>
                 <button
                   onClick={() => setConfirmDelete(false)}
-                  className="rounded border border-gray-600 px-4 py-2 text-sm"
+                  className="rounded border border-accent px-4 py-2 text-sm text-muted-foreground"
                 >
                   Cancel
                 </button>
@@ -256,7 +256,7 @@ export default function CampaignDetailPage() {
             ) : (
               <button
                 onClick={() => setConfirmDelete(true)}
-                className="flex items-center gap-2 rounded border border-red-500/50 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10"
+                className="flex items-center gap-2 rounded border border-destructive/50 px-4 py-2 text-sm text-destructive hover:bg-destructive/10"
               >
                 <Trash2 className="h-4 w-4" />
                 Archive campaign
@@ -265,13 +265,13 @@ export default function CampaignDetailPage() {
           </div>
         </div>
 
-        <div className="mt-12 border-t border-white/10 pt-8">
-          <h2 className="mb-4 text-xl font-bold uppercase tracking-widest text-green-500">
+        <div className="mt-12 border-t border-accent pt-8">
+          <h2 className="mb-4 text-xl font-bold uppercase tracking-widest text-primary">
             Live Response Ledger
           </h2>
-          <div className="overflow-hidden rounded-xl border border-white/5 bg-zinc-900/30">
+          <div className="overflow-hidden rounded-xl border border-accent bg-muted">
             <table className="w-full text-left text-xs">
-              <thead className="bg-white/5 font-black uppercase text-zinc-500">
+              <thead className="bg-background/50 font-black uppercase text-muted-foreground">
                 <tr>
                   <th className="p-4">Student</th>
                   <th className="p-4">Student ID</th>
@@ -279,10 +279,10 @@ export default function CampaignDetailPage() {
                   <th className="p-4">Timestamp</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody className="divide-y divide-accent">
                 {responses.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="p-4 text-zinc-500">
+                    <td colSpan={4} className="p-4 text-muted-foreground">
                       No responses yet.
                     </td>
                   </tr>
@@ -291,24 +291,24 @@ export default function CampaignDetailPage() {
                   <tr
                     key={r.id}
                     onClick={() => router.push(`/responses/${r.id}`)}
-                    className="cursor-pointer transition-colors hover:bg-white/5"
+                    className="cursor-pointer transition-colors hover:bg-background/30"
                   >
                     <td className="p-4">
                       <Link
                         href={`/responses/${r.id}`}
-                        className="block font-bold hover:text-blue-400"
+                        className="block font-bold hover:text-primary"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {r.first_name ?? ""} {r.last_name ?? ""}
                       </Link>
                     </td>
-                    <td className="p-4 text-zinc-400">{r.student_id ?? "—"}</td>
-                    <td className="p-4 text-blue-400">
+                    <td className="p-4 text-muted-foreground">{r.student_id ?? "—"}</td>
+                    <td className="p-4 text-success">
                       {r.venmo_username
                         ? `@${(r.venmo_username ?? "").replace(/^@/, "")}`
                         : "—"}
                     </td>
-                    <td className="p-4 text-zinc-500">
+                    <td className="p-4 text-muted-foreground">
                       {r.created_at
                         ? new Date(r.created_at).toLocaleString()
                         : "—"}

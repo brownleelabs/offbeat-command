@@ -132,22 +132,22 @@ export default function FleetPage() {
       : "Unassigned";
 
   return (
-    <div className="min-h-screen bg-black p-8 font-sans text-white">
+    <div className="min-h-screen bg-background p-8 font-sans text-foreground">
       <div className="mb-8 flex items-center justify-between">
-        <h1 className="text-2xl font-bold uppercase tracking-tighter text-green-500">
+        <h1 className="text-2xl font-bold uppercase tracking-tighter text-primary">
           Fleet Command
         </h1>
         <button
           onClick={handleReset}
           disabled={isResetting}
-          className="rounded bg-red-600 px-4 py-2 text-xs font-bold uppercase text-white transition-all hover:bg-red-700 disabled:opacity-50"
+          className="rounded bg-destructive px-4 py-2 text-xs font-bold uppercase text-destructive-foreground transition-all hover:opacity-90 disabled:opacity-50"
         >
           {isResetting ? "Resetting..." : "Reset All Assets"}
         </button>
       </div>
 
       {error && (
-        <div className="mb-6 rounded-lg border border-red-500/50 bg-red-900/20 p-4 text-red-400">
+        <div className="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
           <strong>Supabase error:</strong> {error}
         </div>
       )}
@@ -156,8 +156,8 @@ export default function FleetPage() {
         <div
           className={`mb-6 rounded-lg p-4 ${
             assignMessage.type === "success"
-              ? "border border-green-500/50 bg-green-900/20 text-green-400"
-              : "border border-red-500/50 bg-red-900/20 text-red-400"
+              ? "border border-success/50 bg-success/10 text-success"
+              : "border border-destructive/50 bg-destructive/10 text-destructive"
           }`}
         >
           {assignMessage.text}
@@ -165,10 +165,10 @@ export default function FleetPage() {
       )}
 
       {loading ? (
-        <p className="text-zinc-500">Loading assets from Supabase...</p>
+        <p className="text-muted-foreground">Loading assets from Supabase...</p>
       ) : tokens.length === 0 ? (
-        <p className="text-zinc-500">
-          No assets in the <code className="rounded bg-zinc-800 px-1">tokens</code> table.
+        <p className="text-muted-foreground">
+          No assets in the <code className="rounded bg-muted px-1">tokens</code> table.
           Add rows in Supabase to see them here.
         </p>
       ) : (
@@ -177,7 +177,7 @@ export default function FleetPage() {
             <select
               value={selectedCampaignId}
               onChange={(e) => setSelectedCampaignId(e.target.value)}
-              className="rounded border border-gray-700 bg-gray-900 p-2 text-sm"
+              className="rounded border border-accent bg-muted p-2 text-sm"
             >
               <option value="">Select campaign to assign...</option>
               {campaigns.map((c) => (
@@ -189,18 +189,18 @@ export default function FleetPage() {
             <button
               onClick={handleBulkAssign}
               disabled={!selectedCampaignId || selectedTokenIds.size === 0 || isAssigning}
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-bold disabled:opacity-50"
+              className="rounded bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-50"
             >
               {isAssigning ? "Assigning..." : "Bulk Assign"}
             </button>
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-muted-foreground">
               {selectedTokenIds.size} selected
             </span>
           </div>
 
-          <div className="overflow-hidden rounded-lg border border-white/10 bg-zinc-900/30">
+          <div className="overflow-hidden rounded-lg border border-accent bg-muted">
             <table className="w-full text-left">
-              <thead className="bg-white/5 text-[10px] uppercase tracking-widest text-zinc-500">
+              <thead className="bg-background/50 text-[10px] uppercase tracking-widest text-muted-foreground">
                 <tr>
                   <th className="p-4">
                     <input
@@ -216,9 +216,9 @@ export default function FleetPage() {
                   <th className="p-4">Value</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody className="divide-y divide-accent">
                 {tokens.map((token) => (
-                  <tr key={String(token.id)} className="hover:bg-white/5">
+                  <tr key={String(token.id)} className="hover:bg-background/30">
                     <td className="p-4">
                       <input
                         type="checkbox"
@@ -229,26 +229,26 @@ export default function FleetPage() {
                     <td className="p-4 font-mono text-sm">
                       {String(token.id).slice(-8)}
                     </td>
-                    <td className="p-4 font-mono text-sm text-zinc-400">
+                    <td className="p-4 font-mono text-sm text-muted-foreground">
                       {lat(token) != null && lng(token) != null
                         ? `${Number(lat(token)).toFixed(4)}, ${Number(lng(token)).toFixed(4)}`
                         : "—"}
                     </td>
-                    <td className="p-4 text-emerald-400">
+                    <td className="p-4 text-success">
                       {campaignName(token)}
                     </td>
                     <td className="p-4">
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${
                           token.status === "active"
-                            ? "bg-green-500 text-black"
-                            : "bg-zinc-700 text-zinc-400"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground"
                         }`}
                       >
                         {String(token.status ?? "—")}
                       </span>
                     </td>
-                    <td className="p-4 font-mono text-zinc-400">
+                    <td className="p-4 font-mono text-foreground">
                       ${valUsd(token)}
                     </td>
                   </tr>

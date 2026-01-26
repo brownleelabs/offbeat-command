@@ -48,16 +48,16 @@ export default function ResponseDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-black text-white">
+      <div className="flex h-screen items-center justify-center bg-background text-foreground">
         Loading record...
       </div>
     );
   }
   if (notFound || !response) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-black text-white">
-        <p className="text-zinc-400">Response not found.</p>
-        <Link href="/" className="text-blue-400 hover:underline">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background text-foreground">
+        <p className="text-muted-foreground">Response not found.</p>
+        <Link href="/" className="text-primary hover:underline">
           ← Back to dashboard
         </Link>
       </div>
@@ -72,16 +72,16 @@ export default function ResponseDetailPage() {
     : [];
 
   return (
-    <div className="min-h-screen bg-black p-8 font-sans text-white">
+    <div className="min-h-screen bg-background p-8 font-sans text-foreground">
       <button
         onClick={() => router.back()}
-        className="mb-8 flex items-center gap-2 text-zinc-500 transition-colors hover:text-white"
+        className="mb-8 flex items-center gap-2 text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft size={18} /> Back to Ledger
       </button>
 
       <div className="mx-auto max-w-2xl">
-        <h1 className="mb-8 text-3xl font-black uppercase tracking-tighter text-blue-500">
+        <h1 className="mb-8 text-3xl font-black uppercase tracking-tighter text-primary">
           Submission Record
         </h1>
 
@@ -105,27 +105,27 @@ export default function ResponseDetailPage() {
             icon={<CreditCard size={16} />}
             label="Venmo Username"
             value={venmoDisplay}
-            color="text-green-400"
+            color="text-success"
           />
         </div>
 
-        <div className="rounded-2xl border border-white/5 bg-zinc-900/30 p-6">
-          <h2 className="mb-6 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">
+        <div className="rounded-2xl border border-accent bg-muted p-6">
+          <h2 className="mb-6 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground">
             <FileText size={14} /> Research Variables
           </h2>
           <div className="space-y-6">
             {customAnswers.length === 0 && (
-              <p className="text-sm text-zinc-500">No custom answers.</p>
+              <p className="text-sm text-muted-foreground">No custom answers.</p>
             )}
             {customAnswers.map((item, i) => (
               <div
                 key={i}
-                className="border-l-2 border-blue-500/30 pl-4"
+                className="border-l-2 border-primary/30 pl-4"
               >
-                <p className="mb-1 text-[10px] font-bold uppercase text-zinc-500">
+                <p className="mb-1 text-[10px] font-bold uppercase text-muted-foreground">
                   {item.text ?? `Question ${item.order ?? i + 1}`}
                 </p>
-                <p className="text-sm leading-relaxed text-white">
+                <p className="text-sm leading-relaxed text-foreground">
                   {item.answer ?? "—"}
                 </p>
               </div>
@@ -141,7 +141,7 @@ function DetailCard({
   icon,
   label,
   value,
-  color = "text-white",
+  color = "text-foreground",
 }: {
   icon: React.ReactNode;
   label: string;
@@ -149,8 +149,8 @@ function DetailCard({
   color?: string;
 }) {
   return (
-    <div className="rounded-xl border border-white/5 bg-zinc-900/50 p-4">
-      <div className="mb-1 flex items-center gap-2 text-zinc-500">
+    <div className="rounded-xl border border-accent bg-muted p-4">
+      <div className="mb-1 flex items-center gap-2 text-muted-foreground">
         {icon}
         <span className="text-[10px] font-bold uppercase tracking-widest">
           {label}

@@ -89,19 +89,19 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <nav className="sticky top-0 z-50 flex items-center justify-between border-b border-gray-800 bg-gray-900 px-8 py-4">
-        <h1 className="text-xl font-bold tracking-tighter text-blue-500">
+    <div className="min-h-screen bg-background text-foreground">
+      <nav className="sticky top-0 z-50 flex items-center justify-between border-b border-accent bg-muted px-8 py-4">
+        <h1 className="text-xl font-bold tracking-tighter text-primary">
           OFFBEAT COMMAND
         </h1>
-        <div className="flex rounded-lg border border-gray-800 bg-black p-1">
+        <div className="flex rounded-lg border border-accent bg-background p-1">
           <button
             onClick={() => {
               setActiveTab("map");
               loadData();
             }}
             className={`rounded-md px-6 py-2 transition ${
-              activeTab === "map" ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
+              activeTab === "map" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
             }`}
           >
             MAP
@@ -112,7 +112,7 @@ export default function AdminDashboard() {
               loadData();
             }}
             className={`rounded-md px-6 py-2 transition ${
-              activeTab === "fleet" ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
+              activeTab === "fleet" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
             }`}
           >
             FLEET
@@ -120,13 +120,13 @@ export default function AdminDashboard() {
           <button
             onClick={() => setActiveTab("campaigns")}
             className={`rounded-md px-6 py-2 transition ${
-              activeTab === "campaigns" ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
+              activeTab === "campaigns" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
             }`}
           >
             CAMPAIGNS
           </button>
         </div>
-        <div className="w-32 text-right font-mono text-xs uppercase text-gray-500">
+        <div className="w-32 text-right font-mono text-xs uppercase text-muted-foreground">
           Ver 2.0.1
         </div>
       </nav>
@@ -179,34 +179,34 @@ function ProjectStats({
   const totalPayout = responsesCount * PAYOUT_PER_RESPONSE;
 
   return (
-    <div className="grid grid-cols-1 gap-4 border-b border-white/5 bg-black/40 px-6 py-4 md:grid-cols-3">
-      <div className="rounded-xl border border-white/5 bg-zinc-900/50 p-4 backdrop-blur-sm">
-        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+    <div className="grid grid-cols-1 gap-4 border-b border-accent bg-background/95 px-6 py-4 md:grid-cols-3">
+      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Fleet Status
         </h3>
-        <p className="mb-2 font-mono text-xl font-bold text-white">
+        <p className="mb-2 font-mono text-xl font-bold text-foreground">
           {foundCount} / {tokenCount}
         </p>
-        <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+        <div className="h-2 overflow-hidden rounded-full bg-muted">
           <div
-            className="h-full rounded-full bg-blue-500 transition-all duration-500"
+            className="h-full rounded-full bg-primary transition-all duration-500"
             style={{ width: `${Math.min(progress, 100)}%` }}
           />
         </div>
       </div>
-      <div className="rounded-xl border border-white/5 bg-zinc-900/50 p-4 backdrop-blur-sm">
-        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Research Participation
         </h3>
-        <p className="font-mono text-xl font-bold text-white">
+        <p className="font-mono text-xl font-bold text-foreground">
           {responsesCount.toLocaleString()} submission{responsesCount !== 1 ? "s" : ""}
         </p>
       </div>
-      <div className="rounded-xl border border-white/5 bg-zinc-900/50 p-4 backdrop-blur-sm">
-        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Payout Liability
         </h3>
-        <p className="font-mono text-xl font-bold tabular-nums text-green-500">
+        <p className="font-mono text-xl font-bold tabular-nums text-success">
           ${totalPayout.toLocaleString("en-US", { minimumFractionDigits: 2 })}
         </p>
       </div>
@@ -251,7 +251,7 @@ function FleetTab({
           <select
             value={targetCampaignId}
             onChange={(e) => setTargetCampaignId(e.target.value)}
-            className="rounded border border-gray-700 bg-gray-900 p-2 text-sm"
+            className="rounded border border-accent bg-muted p-2 text-sm"
           >
             <option value="">Select Campaign to Assign...</option>
             {campaigns.map((c) => (
@@ -263,13 +263,13 @@ function FleetTab({
           <button
             onClick={onAssign}
             disabled={!targetCampaignId || selectedTokenIds.size === 0}
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-bold disabled:opacity-50"
+            className="rounded bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-50"
           >
             BULK ASSIGN
           </button>
           <button
             onClick={onRefresh}
-            className="rounded border border-gray-700 px-4 py-2 text-sm"
+            className="rounded border border-accent px-4 py-2 text-sm"
           >
             Refresh
           </button>
@@ -277,7 +277,7 @@ function FleetTab({
       </div>
 
       <table className="w-full border-collapse text-left">
-        <thead className="border-b border-gray-800 text-xs uppercase text-gray-500">
+        <thead className="border-b border-accent text-xs uppercase text-muted-foreground">
           <tr>
             <th className="p-4">
               <input
@@ -292,9 +292,9 @@ function FleetTab({
             <th className="p-4 text-right">Status</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-900 text-sm">
+        <tbody className="divide-y divide-accent text-sm">
           {tokens.map((t) => (
-            <tr key={t.id} className="hover:bg-gray-900/50">
+            <tr key={t.id} className="hover:bg-muted/50">
               <td className="p-4">
                 <input
                   type="checkbox"
@@ -303,14 +303,14 @@ function FleetTab({
                 />
               </td>
               <td className="font-mono p-4">...{t.id.slice(-8)}</td>
-              <td className="p-4 text-gray-400">
+              <td className="p-4 text-muted-foreground">
                 {t.lat.toFixed(4)}, {t.lng.toFixed(4)}
               </td>
-              <td className="p-4 font-bold text-emerald-400">
+              <td className="p-4 font-bold text-success">
                 {t.campaigns?.name ?? "Unassigned"}
               </td>
               <td className="p-4 text-right">
-                <span className="rounded bg-gray-800 px-2 py-1 font-bold text-[10px] uppercase">
+                <span className="rounded bg-muted px-2 py-1 font-bold text-[10px] uppercase">
                   {t.status}
                 </span>
               </td>
@@ -376,45 +376,45 @@ function CampaignsTab({
 
   return (
     <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 p-8 md:grid-cols-3">
-      <div className="h-fit rounded-xl border border-gray-800 bg-gray-900 p-6">
+      <div className="h-fit rounded-xl border border-accent bg-muted p-6">
         <h2 className="mb-4 text-xl font-bold">Create Campaign</h2>
         <div className="space-y-4">
           {/* Required fields – fixed for reward payout */}
-          <div className="rounded-lg border border-emerald-500/30 bg-black/40 p-3">
-            <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-emerald-400">
+          <div className="rounded-lg border border-success/30 bg-background/95 p-3">
+            <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-success">
               Required fields (reward payout)
             </h3>
-            <ul className="space-y-1.5 text-sm text-zinc-300">
+            <ul className="space-y-1.5 text-sm text-accent">
               {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
                 <li key={f.key} className="flex items-center gap-2">
-                  <span className="text-emerald-500">✓</span>
+                  <span className="text-success">✓</span>
                   {f.label}
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-[10px] text-zinc-500">
+            <p className="mt-2 text-[10px] text-muted-foreground">
               Collected for every response; used for payouts.
             </p>
           </div>
 
-          <label className="block text-sm text-gray-400">Campaign name</label>
+          <label className="block text-sm text-muted-foreground">Campaign name</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Austin Q1 Survey"
-            className="w-full rounded border border-gray-700 bg-black px-3 py-2 text-sm"
+            className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
           />
 
           <div className="flex items-center justify-between">
-            <label className="text-sm text-gray-400">
+            <label className="text-sm text-muted-foreground">
               Additional questions (up to {MAX_QUESTIONS})
             </label>
             {questions.length < MAX_QUESTIONS && (
               <button
                 type="button"
                 onClick={addQuestion}
-                className="text-xs text-blue-400 hover:underline"
+                className="text-xs text-primary hover:underline"
               >
                 + Add
               </button>
@@ -427,13 +427,13 @@ function CampaignsTab({
                 value={q}
                 onChange={(e) => setQuestion(i, e.target.value)}
                 placeholder={`Question ${i + 1}`}
-                className="flex-1 rounded border border-gray-700 bg-black px-3 py-2 text-sm"
+                className="flex-1 rounded border border-accent bg-background px-3 py-2 text-sm"
               />
               {questions.length > 1 && (
                 <button
                   type="button"
                   onClick={() => removeQuestion(i)}
-                  className="text-red-400 hover:underline"
+                  className="text-destructive hover:underline"
                 >
                   ×
                 </button>
@@ -443,7 +443,7 @@ function CampaignsTab({
           <button
             onClick={createCampaign}
             disabled={saving || !name.trim()}
-            className="w-full rounded bg-blue-600 py-2 font-bold disabled:opacity-50"
+            className="w-full rounded bg-primary py-2 font-bold text-primary-foreground disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save Campaign"}
           </button>
@@ -453,23 +453,23 @@ function CampaignsTab({
       <div className="space-y-4 md:col-span-2">
         <h2 className="text-xl font-bold">Active Surveys</h2>
         {campaigns.length === 0 && (
-          <p className="text-sm italic text-gray-500">No campaigns yet.</p>
+          <p className="text-sm italic text-muted-foreground">No campaigns yet.</p>
         )}
         {campaigns.map((c) => (
           <Link
             key={c.id}
             href={`/campaigns/${c.id}`}
-            className="flex justify-between rounded-lg border border-gray-800 bg-gray-900 p-4 transition hover:border-gray-700 hover:bg-gray-800/50"
+            className="flex justify-between rounded-lg border border-accent bg-muted p-4 transition hover:bg-muted/80"
           >
             <div>
               <span className="font-bold">{c.name}</span>
-              <p className="font-mono text-xs text-gray-500">{c.id}</p>
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="font-mono text-xs text-muted-foreground">{c.id}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
                 {requiredCount} required fields
                 {questionCount(c) > 0 && ` + ${questionCount(c)} questions`}
               </p>
             </div>
-            <div className="text-right text-sm font-bold text-blue-400">
+            <div className="text-right text-sm font-bold text-primary">
               {questionCount(c)} custom →
             </div>
           </Link>

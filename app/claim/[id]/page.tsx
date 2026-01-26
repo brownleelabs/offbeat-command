@@ -142,23 +142,23 @@ export default function ClaimPage() {
   const questions = Array.isArray(campaign?.questions) ? campaign.questions : [];
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-black p-4 text-white">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4 text-foreground">
       {status === "loading" && (
         <h1 className="text-2xl animate-pulse">Loading...</h1>
       )}
 
       {(status === "form" || status === "submitting") && (
         <div className="w-full max-w-md">
-          <h1 className="mb-6 text-2xl font-bold text-green-500">
+          <h1 className="mb-6 text-2xl font-bold text-primary">
             Claim your reward
           </h1>
-          <p className="mb-6 text-sm text-zinc-400">
+          <p className="mb-6 text-sm text-muted-foreground">
             Enter your details for payout. All fields are required.
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="mb-1 block text-xs text-zinc-500">
+              <label className="mb-1 block text-xs text-muted-foreground">
                 {CAMPAIGN_REQUIRED_FIELDS.find((f) => f.key === "first_name")?.label}
               </label>
               <input
@@ -166,12 +166,12 @@ export default function ClaimPage() {
                 required
                 value={firstName}
                 onChange={(e) => setFirstName(e.target.value)}
-                className="w-full rounded border border-gray-700 bg-zinc-900 px-3 py-2 text-sm"
+                className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
                 placeholder="First name"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-zinc-500">
+              <label className="mb-1 block text-xs text-muted-foreground">
                 {CAMPAIGN_REQUIRED_FIELDS.find((f) => f.key === "last_name")?.label}
               </label>
               <input
@@ -179,12 +179,12 @@ export default function ClaimPage() {
                 required
                 value={lastName}
                 onChange={(e) => setLastName(e.target.value)}
-                className="w-full rounded border border-gray-700 bg-zinc-900 px-3 py-2 text-sm"
+                className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
                 placeholder="Last name"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-zinc-500">
+              <label className="mb-1 block text-xs text-muted-foreground">
                 Student ID
               </label>
               <input
@@ -192,12 +192,12 @@ export default function ClaimPage() {
                 required
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value)}
-                className="w-full rounded border border-gray-700 bg-zinc-900 px-3 py-2 text-sm"
+                className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
                 placeholder="Student ID"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-zinc-500">
+              <label className="mb-1 block text-xs text-muted-foreground">
                 Student email
               </label>
               <input
@@ -205,12 +205,12 @@ export default function ClaimPage() {
                 required
                 value={studentEmail}
                 onChange={(e) => setStudentEmail(e.target.value)}
-                className="w-full rounded border border-gray-700 bg-zinc-900 px-3 py-2 text-sm"
+                className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
                 placeholder="you@university.edu"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-zinc-500">
+              <label className="mb-1 block text-xs text-muted-foreground">
                 Venmo username
               </label>
               <input
@@ -218,14 +218,14 @@ export default function ClaimPage() {
                 required
                 value={venmoUsername}
                 onChange={(e) => setVenmoUsername(e.target.value)}
-                className="w-full rounded border border-gray-700 bg-zinc-900 px-3 py-2 text-sm"
+                className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
                 placeholder="@username"
               />
             </div>
 
             {questions.length > 0 && (
-              <div className="border-t border-gray-800 pt-4">
-                <h2 className="mb-3 text-sm font-bold text-zinc-400">
+              <div className="border-t border-accent pt-4">
+                <h2 className="mb-3 text-sm font-bold text-muted-foreground">
                   Survey questions
                 </h2>
                 <div className="space-y-3">
@@ -233,7 +233,7 @@ export default function ClaimPage() {
                     .sort((a, b) => a.order - b.order)
                     .map((q) => (
                       <div key={q.order}>
-                        <label className="mb-1 block text-xs text-zinc-500">
+                        <label className="mb-1 block text-xs text-muted-foreground">
                           {q.text}
                         </label>
                         <input
@@ -245,7 +245,7 @@ export default function ClaimPage() {
                               [q.order]: e.target.value,
                             }))
                           }
-                          className="w-full rounded border border-gray-700 bg-zinc-900 px-3 py-2 text-sm"
+                          className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
                         />
                       </div>
                     ))}
@@ -253,13 +253,13 @@ export default function ClaimPage() {
               </div>
             )}
 
-            <p className="mt-4 text-center text-xs text-zinc-500">
+            <p className="mt-4 text-center text-xs text-muted-foreground">
               Location Access Required for Reward
             </p>
             <button
               type="submit"
               disabled={status === "submitting"}
-              className="mt-3 w-full rounded bg-green-600 py-3 font-bold text-black disabled:opacity-50"
+              className="mt-3 w-full rounded bg-primary py-3 font-bold text-primary-foreground disabled:opacity-50"
             >
               {status === "submitting"
                 ? submitPhase === "location"
@@ -273,9 +273,9 @@ export default function ClaimPage() {
 
       {status === "success" && (
         <div className="text-center">
-          <h1 className="mb-4 text-4xl font-bold text-green-500">ACCESS GRANTED</h1>
-          <p className="text-xl">Asset Secured: $25.00</p>
-          <p className="mt-2 text-sm text-zinc-500">
+          <h1 className="mb-4 text-4xl font-bold text-success">ACCESS GRANTED</h1>
+          <p className="text-xl text-success">Asset Secured: $25.00</p>
+          <p className="mt-2 text-sm text-muted-foreground">
             Payout will be sent to your Venmo.
           </p>
         </div>
@@ -283,9 +283,9 @@ export default function ClaimPage() {
 
       {status === "error" && (
         <div className="text-center">
-          <h1 className="mb-4 text-3xl font-bold text-red-500">Something went wrong</h1>
-          <div className="rounded border border-red-500/50 bg-red-900/30 p-4">
-            <p className="break-all font-mono text-sm text-red-400">{errorMsg}</p>
+          <h1 className="mb-4 text-3xl font-bold text-destructive">Something went wrong</h1>
+          <div className="rounded border border-destructive/50 bg-destructive/10 p-4">
+            <p className="break-all font-mono text-sm text-destructive">{errorMsg}</p>
           </div>
         </div>
       )}
