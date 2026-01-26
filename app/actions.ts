@@ -41,10 +41,19 @@ export async function claimToken(id: string) {
   return { success: true }
 }
 
-export async function resetDemo() {
+/** Reset all tokens to active. Pass orgId to only reset tokens for that org (RLS-friendly). */
+export async function resetDemo(orgId?: string | null) {
   const supabase = getSupabase()
-  await supabase
+  let query = supabase
     .from('tokens')
     .update({ status: 'active' })
     .neq('status', 'active')
+  if (orgId != null) {
+    query = query.eq('organization_id', orgId)
+  }
+  const { error } = await query
+  if (error) {
+    console.error('resetDemo:', error)
+    throw new Error(error?.message ?? 'Reset failed')
+  }
 }

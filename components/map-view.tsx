@@ -4,7 +4,7 @@ import Map, { Marker } from "react-map-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { MapPin, RefreshCw, Activity } from "lucide-react";
 import type { Token } from "@/types";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { useDashboard } from "@/components/dashboard-context";
 import { resetDemo } from "@/app/actions";
@@ -33,18 +33,20 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
 
   const supabase = createClient();
 
+  const fetchTokens = useCallback(async () => {
+    const client = createClient();
+    let query = client.from("tokens").select("*");
+    if (orgId != null) {
+      query = query.eq("organization_id", orgId);
+    }
+    const { data } = await query;
+    if (data) setTokens(data as Token[]);
+  }, [orgId]);
+
   // 1. Fetch Initial Data (org-aware)
   useEffect(() => {
-    async function fetchTokens() {
-      let query = supabase.from("tokens").select("*");
-      if (orgId != null) {
-        query = query.eq("organization_id", orgId);
-      }
-      const { data } = await query;
-      if (data) setTokens(data as Token[]);
-    }
     fetchTokens();
-  }, [orgId]);
+  }, [fetchTokens]);
 
   // 2. Realtime Listener (only apply updates for current org when orgId set)
   useEffect(() => {
@@ -81,39 +83,57 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapV
 
   const handleReset = async () => {
     setIsReseting(true);
-    await resetDemo();
-    setLogs([]);
-    setIsReseting(false);
+    try {
+      await resetDemo(orgId);
+      setLogs([]);
+      await fetchTokens();
+    } finally {
+      setIsReseting(false);
+    }
   };
+
+  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  const canShowMap = !!mapboxToken;
 
   return (
     <div className="relative h-full min-h-[300px] w-full bg-background">
-      {/* --- THE MAP --- */}
-      <Map
-        initialViewState={INITIAL_VIEW_STATE}
-        mapboxAccessToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN}
-        mapStyle="mapbox://styles/mapbox/dark-v11"
-        style={{ width: "100%", height: "100%" }}
-        attributionControl={false}
-      >
-        {tokens.map((t) => (
-          <Marker key={t.id} longitude={t.lng} latitude={t.lat}>
-            <div
-              className={`p-2 rounded-full transition-all duration-500 ${
-                t.status === "active"
-                  ? "bg-primary animate-pulse shadow-[0_0_15px_var(--primary)]"
-                  : "bg-muted opacity-50"
-              }`}
-            >
-              <MapPin
-                className={`w-6 h-6 ${
-                  t.status === "active" ? "text-primary-foreground" : "text-muted-foreground"
-                }`}
-              />
-            </div>
-          </Marker>
-        ))}
-      </Map>
+      {/* --- THE MAP (needs token and a sized container) --- */}
+      <div className="absolute inset-0">
+        {canShowMap ? (
+          <Map
+            initialViewState={INITIAL_VIEW_STATE}
+            mapboxAccessToken={mapboxToken}
+            mapStyle="mapbox://styles/mapbox/dark-v11"
+            style={{ width: "100%", height: "100%" }}
+            attributionControl={false}
+          >
+            {tokens.map((t) => (
+              <Marker key={t.id} longitude={t.lng} latitude={t.lat}>
+                <div
+                  className={`p-2 rounded-full transition-all duration-500 ${
+                    t.status === "active"
+                      ? "bg-primary animate-pulse shadow-[0_0_15px_var(--primary)]"
+                      : "bg-muted opacity-50"
+                  }`}
+                >
+                  <MapPin
+                    className={`w-6 h-6 ${
+                      t.status === "active" ? "text-primary-foreground" : "text-muted-foreground"
+                    }`}
+                  />
+                </div>
+              </Marker>
+            ))}
+          </Map>
+        ) : (
+          <div className="flex h-full w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-8 text-center">
+            <p className="text-muted-foreground">
+              Map unavailable: add <code className="rounded bg-muted px-1">NEXT_PUBLIC_MAPBOX_TOKEN</code> to{" "}
+              <code className="rounded bg-muted px-1">.env.local</code>
+            </p>
+          </div>
+        )}
+      </div>
 
       {/* --- UI OVERLAYS --- */}
       
