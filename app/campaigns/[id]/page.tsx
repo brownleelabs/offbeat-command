@@ -85,7 +85,7 @@ export default function CampaignDetailPage() {
     if (!error) {
       setCampaign((prev) =>
         prev ? { ...prev, name: name.trim(), questions: qs } : null
-      });
+      );
     }
   }
 
