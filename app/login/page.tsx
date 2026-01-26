@@ -95,6 +95,15 @@ export default function LoginPage() {
           </button>
         </form>
 
+        <p className="mt-4 text-center">
+          <Link
+            href="/schools"
+            className="block rounded border border-accent py-2.5 text-center text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          >
+            I&apos;m a Student / Hunter
+          </Link>
+        </p>
+
         <p className="mt-6 text-center text-xs text-muted-foreground">
           <Link href="/" className="text-primary hover:underline">
             ← Back to app

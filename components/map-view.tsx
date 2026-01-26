@@ -16,8 +16,17 @@ const INITIAL_VIEW_STATE = {
   zoom: 15,
 };
 
-export default function MapView() {
-  const { orgId } = useDashboard();
+interface MapViewProps {
+  /** When true, hide admin-only controls (e.g. Reset). Used for public student map. */
+  readOnly?: boolean;
+  /** When set, fetch tokens for this org instead of using dashboard context. Used for public /schools/[slug]. */
+  orgId?: string | null;
+}
+
+export default function MapView({ readOnly = false, orgId: orgIdOverride }: MapViewProps = {}) {
+  const dashboard = useDashboard();
+  const orgId = orgIdOverride != null ? orgIdOverride : dashboard.orgId;
+
   const [tokens, setTokens] = useState<Token[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [isReseting, setIsReseting] = useState(false);
@@ -70,16 +79,15 @@ export default function MapView() {
     };
   }, [orgId]);
 
-  // 3. The Reset Button Handler
   const handleReset = async () => {
     setIsReseting(true);
-    await resetDemo(); // Call the Server Action
-    setLogs([]); // Clear the logs
+    await resetDemo();
+    setLogs([]);
     setIsReseting(false);
   };
 
   return (
-    <div className="relative w-full h-screen bg-background">
+    <div className="relative h-full min-h-[300px] w-full bg-background">
       {/* --- THE MAP --- */}
       <Map
         initialViewState={INITIAL_VIEW_STATE}
@@ -148,17 +156,19 @@ export default function MapView() {
         </div>
       </div>
 
-      {/* 3. BOTTOM RIGHT: The Reset Button */}
-      <div className="absolute bottom-8 right-8 z-50">
-        <button
-          onClick={handleReset}
-          disabled={isReseting}
-          className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-full font-bold hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-[0_0_20px_var(--primary)]"
-        >
-          <RefreshCw className={`w-4 h-4 ${isReseting ? "animate-spin" : ""}`} />
-          {isReseting ? "Reloading Grid..." : "Reset Simulation"}
-        </button>
-      </div>
+      {/* 3. BOTTOM RIGHT: The Reset Button (hidden in readOnly / public student view) */}
+      {!readOnly && (
+        <div className="absolute bottom-8 right-8 z-50">
+          <button
+            onClick={handleReset}
+            disabled={isReseting}
+            className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-full font-bold hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-[0_0_20px_var(--primary)]"
+          >
+            <RefreshCw className={`w-4 h-4 ${isReseting ? "animate-spin" : ""}`} />
+            {isReseting ? "Reloading Grid..." : "Reset Simulation"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

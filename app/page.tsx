@@ -32,8 +32,14 @@ function normalizeTokensWithCampaign(rows: unknown[]): TokenWithCampaign[] {
   });
 }
 
+const ADMIN_ROLES = ["SUPER_ADMIN", "ORG_ADMIN", "AUDITOR"] as const;
+function isAdminRole(role: string | undefined): role is (typeof ADMIN_ROLES)[number] {
+  return role != null && (ADMIN_ROLES as readonly string[]).includes(role);
+}
+
 export default function AdminDashboard() {
-  const { viewMode, toggleViewMode, userRole, orgId } = useDashboard();
+  const { viewMode, toggleViewMode, userRole, orgId, loading } = useDashboard();
+  const [orgName, setOrgName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("map");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [tokens, setTokens] = useState<TokenWithCampaign[]>([]);
@@ -42,6 +48,29 @@ export default function AdminDashboard() {
   const [targetCampaignId, setTargetCampaignId] = useState("");
 
   const supabase = createClient();
+
+  // Fetch organization name when we have orgId and need it for display (STUDENT or ORG_ADMIN/AUDITOR)
+  useEffect(() => {
+    if (!orgId || !userRole) return;
+    if (userRole === "SUPER_ADMIN" && viewMode === "GLOBAL") return;
+    let cancelled = false;
+    const client = createClient();
+    (async () => {
+      const { data } = await client
+        .from("organizations")
+        .select("name")
+        .eq("id", orgId)
+        .single();
+      if (!cancelled && data && typeof data === "object" && "name" in data) {
+        setOrgName(String((data as { name: string }).name));
+      } else if (!cancelled) {
+        setOrgName(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, userRole, viewMode]);
 
   const loadData = useCallback(async () => {
     let campaignsQuery = supabase
@@ -109,6 +138,34 @@ export default function AdminDashboard() {
     window.location.href = "/login"; // Force full reload to clear state
   };
 
+  // 1. Loading state
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <p className="text-muted-foreground">Authenticating...</p>
+      </div>
+    );
+  }
+
+  // 2. Student gate – do not render admin dashboard
+  if (userRole === "STUDENT") {
+    return (
+      <StudentPlaceholder
+        orgName={orgName ?? "your organization"}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  // 3. Admin view (SUPER_ADMIN, ORG_ADMIN, AUDITOR)
+  if (!isAdminRole(userRole)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <p className="text-muted-foreground">Loading...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       {userRole === "SUPER_ADMIN" && (
@@ -120,6 +177,11 @@ export default function AdminDashboard() {
           >
             VIEW MODE: {viewMode} (CLICK TO SWITCH)
           </button>
+        </div>
+      )}
+      {userRole !== "SUPER_ADMIN" && (
+        <div className="border-b border-accent/20 bg-muted p-2 text-center text-xs font-mono text-muted-foreground">
+          Organization: {orgName ?? "—"}
         </div>
       )}
       <nav className="sticky top-0 z-50 flex items-center justify-between border-b border-accent bg-muted px-8 py-4">
@@ -205,6 +267,33 @@ export default function AdminDashboard() {
           />
         )}
       </main>
+    </div>
+  );
+}
+
+function StudentPlaceholder({
+  orgName,
+  onLogout,
+}: {
+  orgName: string;
+  onLogout: () => void;
+}) {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 text-foreground">
+      <div className="w-full max-w-md rounded-xl border border-accent bg-muted p-8 text-center">
+        <h1 className="mb-2 text-xl font-bold text-primary">Student Access</h1>
+        <p className="mb-6 text-sm text-muted-foreground">
+          You are logged in as a student at {orgName}. The Student App is coming
+          soon.
+        </p>
+        <button
+          type="button"
+          onClick={onLogout}
+          className="rounded bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition-colors hover:opacity-90"
+        >
+          Logout
+        </button>
+      </div>
     </div>
   );
 }
