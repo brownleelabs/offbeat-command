@@ -38,7 +38,7 @@ function isAdminRole(role: string | undefined): role is (typeof ADMIN_ROLES)[num
 }
 
 export default function AdminDashboard() {
-  const { viewMode, toggleViewMode, userRole, orgId, loading } = useDashboard();
+  const { viewMode, toggleViewMode, userRole, orgId, loading, profile } = useDashboard();
   const [orgName, setOrgName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("map");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -141,13 +141,33 @@ export default function AdminDashboard() {
   // 1. Loading state
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
-        <p className="text-muted-foreground">Authenticating...</p>
+      <div className="flex h-screen w-full items-center justify-center bg-zinc-950 font-mono text-emerald-500">
+        AUTHENTICATING...
       </div>
     );
   }
 
-  // 2. Student gate – do not render admin dashboard
+  // 2. Missing profile (authenticated but no profile row)
+  if (!profile) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-zinc-950 text-white">
+        <h1 className="text-xl font-bold text-red-500">NO PROFILE FOUND</h1>
+        <p className="text-zinc-400">User authenticated, but no profile row exists.</p>
+        <button
+          type="button"
+          onClick={() => {
+            createClient().auth.signOut();
+            window.location.href = "/login";
+          }}
+          className="rounded border border-zinc-700 px-4 py-2 hover:bg-zinc-800"
+        >
+          FORCE LOGOUT
+        </button>
+      </div>
+    );
+  }
+
+  // 3. Student gate – do not render admin dashboard
   if (userRole === "STUDENT") {
     return (
       <StudentPlaceholder
@@ -157,7 +177,7 @@ export default function AdminDashboard() {
     );
   }
 
-  // 3. Admin view (SUPER_ADMIN, ORG_ADMIN, AUDITOR)
+  // 4. Admin view (SUPER_ADMIN, ORG_ADMIN, AUDITOR)
   if (!isAdminRole(userRole)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
