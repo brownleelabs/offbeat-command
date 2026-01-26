@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
-import { claimToken } from '@/app/actions'
+import { createClient } from '@/lib/supabase' // Use the same connection as the map
 
 export default function ClaimPage() {
   const params = useParams()
@@ -15,11 +15,27 @@ export default function ClaimPage() {
 
     async function performClaim() {
       try {
-        await claimToken(id)
+        console.log("Client: Connecting to DB...")
+        const supabase = createClient()
+        
+        // Direct update (Works because we disabled RLS)
+        const { data, error } = await supabase
+          .from('tokens')
+          .update({ status: 'found' })
+          .eq('id', id)
+          .select()
+
+        if (error) throw error
+        
+        // Double check we actually hit a row
+        if (!data || data.length === 0) {
+           throw new Error("ID not found. Is the chip programmed correctly?")
+        }
+
         setStatus('success')
+        console.log("Client: Success!")
       } catch (err: any) {
         console.error("Claim failed:", err)
-        // Show the actual error message on screen
         setStatus('error')
         setErrorMsg(err.message || "Unknown Error")
       }
