@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import MapView from "@/components/map-view";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
@@ -102,6 +103,12 @@ export default function AdminDashboard() {
     }
   }
 
+  const handleLogout = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    window.location.href = "/login"; // Force full reload to clear state
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       {userRole === "SUPER_ADMIN" && (
@@ -151,8 +158,15 @@ export default function AdminDashboard() {
             CAMPAIGNS
           </button>
         </div>
-        <div className="w-32 text-right font-mono text-xs uppercase text-muted-foreground">
-          Ver 2.0.1
+        <div className="flex w-32 items-center justify-end gap-4 font-mono text-xs uppercase text-muted-foreground">
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="text-xs font-mono uppercase text-muted-foreground transition-colors hover:text-destructive"
+          >
+            LOGOUT
+          </button>
+          <span>Ver 2.0.1</span>
         </div>
       </nav>
 
@@ -178,11 +192,17 @@ export default function AdminDashboard() {
             setTargetCampaignId={setTargetCampaignId}
             onAssign={assignTokens}
             onRefresh={loadData}
+            orgId={orgId}
           />
         )}
 
         {activeTab === "campaigns" && (
-          <CampaignsTab campaigns={campaigns} onRefresh={loadData} supabase={supabase} />
+          <CampaignsTab
+            campaigns={campaigns}
+            onRefresh={loadData}
+            supabase={supabase}
+            orgId={orgId}
+          />
         )}
       </main>
     </div>
@@ -274,6 +294,7 @@ function FleetTab({
   setTargetCampaignId,
   onAssign,
   onRefresh,
+  orgId,
 }: {
   tokens: TokenWithCampaign[];
   campaigns: Campaign[];
@@ -283,6 +304,7 @@ function FleetTab({
   setTargetCampaignId: (id: string) => void;
   onAssign: () => void;
   onRefresh: () => void;
+  orgId: string | null;
 }) {
   const toggleOne = (id: string) => {
     const next = new Set(selectedTokenIds);
@@ -377,10 +399,12 @@ function CampaignsTab({
   campaigns,
   onRefresh,
   supabase,
+  orgId,
 }: {
   campaigns: Campaign[];
   onRefresh: () => void;
   supabase: ReturnType<typeof createClient>;
+  orgId: string | null;
 }) {
   const [name, setName] = useState("");
   const [questions, setQuestions] = useState<string[]>([""]);
@@ -412,6 +436,7 @@ function CampaignsTab({
       name: trimmedName,
       required_fields: CAMPAIGN_REQUIRED_FIELDS,
       questions: qs.length ? qs : null,
+      organization_id: orgId,
     });
     setSaving(false);
     if (!error) {
