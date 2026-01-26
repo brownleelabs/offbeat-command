@@ -20,3 +20,23 @@ export function rowToToken(row: TokenRow): Token {
   const lng = "lng" in row ? row.lng : row.longitude;
   return { id: row.id, lat, lng, status: row.status };
 }
+
+/** Campaign (survey) stored in Supabase. */
+export interface Campaign {
+  id: string;
+  name: string;
+  created_at?: string;
+  /** Up to 10 questions; stored as JSONB in DB. */
+  questions?: CampaignQuestion[];
+}
+
+export interface CampaignQuestion {
+  order: number;
+  text: string;
+}
+
+/** Token row joined with campaign (for Fleet table). Use select('*, campaigns(name)'). */
+export interface TokenWithCampaign extends Token {
+  campaign_id?: string | null;
+  campaigns: { name: string } | null;
+}
