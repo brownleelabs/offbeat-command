@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase";
 import MapView from "@/components/map-view";
 import type { Campaign, TokenWithCampaign } from "@/types";
 import type { CampaignQuestion } from "@/types";
+import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
 
 type Tab = "map" | "fleet" | "campaigns";
 
@@ -288,6 +289,7 @@ function CampaignsTab({
     setSaving(true);
     const { error } = await supabase.from("campaigns").insert({
       name: trimmedName,
+      required_fields: CAMPAIGN_REQUIRED_FIELDS,
       questions: qs.length ? qs : null,
     });
     setSaving(false);
@@ -300,12 +302,31 @@ function CampaignsTab({
 
   const questionCount = (c: Campaign) =>
     Array.isArray(c.questions) ? c.questions.length : 0;
+  const requiredCount = CAMPAIGN_REQUIRED_FIELDS.length;
 
   return (
     <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 p-8 md:grid-cols-3">
       <div className="h-fit rounded-xl border border-gray-800 bg-gray-900 p-6">
         <h2 className="mb-4 text-xl font-bold">Create Campaign</h2>
         <div className="space-y-4">
+          {/* Required fields – fixed for reward payout */}
+          <div className="rounded-lg border border-emerald-500/30 bg-black/40 p-3">
+            <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-emerald-400">
+              Required fields (reward payout)
+            </h3>
+            <ul className="space-y-1.5 text-sm text-zinc-300">
+              {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
+                <li key={f.key} className="flex items-center gap-2">
+                  <span className="text-emerald-500">✓</span>
+                  {f.label}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-[10px] text-zinc-500">
+              Collected for every response; used for payouts.
+            </p>
+          </div>
+
           <label className="block text-sm text-gray-400">Campaign name</label>
           <input
             type="text"
@@ -314,8 +335,11 @@ function CampaignsTab({
             placeholder="e.g. Austin Q1 Survey"
             className="w-full rounded border border-gray-700 bg-black px-3 py-2 text-sm"
           />
+
           <div className="flex items-center justify-between">
-            <label className="text-sm text-gray-400">Questions (up to {MAX_QUESTIONS})</label>
+            <label className="text-sm text-gray-400">
+              Additional questions (up to {MAX_QUESTIONS})
+            </label>
             {questions.length < MAX_QUESTIONS && (
               <button
                 type="button"
@@ -369,9 +393,13 @@ function CampaignsTab({
             <div>
               <span className="font-bold">{c.name}</span>
               <p className="font-mono text-xs text-gray-500">{c.id}</p>
+              <p className="mt-1 text-xs text-zinc-500">
+                {requiredCount} required fields
+                {questionCount(c) > 0 && ` + ${questionCount(c)} questions`}
+              </p>
             </div>
-            <div className="text-sm font-bold text-blue-400">
-              {questionCount(c)} Questions
+            <div className="text-right text-sm font-bold text-blue-400">
+              {questionCount(c)} custom
             </div>
           </div>
         ))}
