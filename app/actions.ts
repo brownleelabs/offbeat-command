@@ -11,12 +11,22 @@ function getSupabaseAnon() {
   return createClient(url, key)
 }
 
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+
 /** Service-role client (bypasses RLS). Use only for trusted server-only flows (e.g. anonymous claim). */
 function getSupabaseService() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY for claim flow")
+  const key = SERVICE_ROLE_KEY
+  if (!url || !key) {
+    console.error('[claim] SUPABASE_SERVICE_ROLE_KEY is not set. Add it to .env.local and restart the dev server.')
+    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY for claim flow")
+  }
   return createClient(url, key)
+}
+
+/** Call before claim flows – returns false if service role key is missing (so we can log clearly). */
+function hasServiceRoleKey(): boolean {
+  return !!SERVICE_ROLE_KEY
 }
 
 export async function claimToken(id: string) {
@@ -64,7 +74,9 @@ export type SubmitClaimInput = {
   lng?: number | null
 }
 
-/** Normalize claim token ID from URL (strip %20, spaces, decode). */
+const UUID_REGEX = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+
+/** Normalize claim token ID from URL: decode, strip junk, extract UUID if present. */
 function normalizeClaimTokenId(raw: string): string {
   let s = String(raw ?? '')
   try {
@@ -72,11 +84,18 @@ function normalizeClaimTokenId(raw: string): string {
   } catch {
     // leave as-is if decoding fails
   }
-  return s.replace(/%20/g, '').replace(/\s+/g, ' ').trim()
+  s = s.replace(/%20/g, '').replace(/\s+/g, ' ').trim()
+  const uuidMatch = s.match(UUID_REGEX)
+  if (uuidMatch) return uuidMatch[0].toLowerCase()
+  return s
 }
 
 /** Load token + campaign for claim page. Uses service role so anonymous users can open the claim form. Never throws – returns null on any error to avoid RSC digest leaks. */
 export async function getTokenForClaim(tokenId: string) {
+  if (!hasServiceRoleKey()) {
+    console.error('[claim] getTokenForClaim: SUPABASE_SERVICE_ROLE_KEY is missing. Add it to .env.local and restart.')
+    return null
+  }
   try {
     const supabase = getSupabaseService()
     const id = normalizeClaimTokenId(tokenId)
@@ -110,7 +129,12 @@ export async function getTokenForClaim(tokenId: string) {
 
     return { token: { id: (token as { id: string }).id, campaign_id: campaignId }, campaign }
   } catch (err) {
-    console.error('getTokenForClaim error:', err)
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('SERVICE_ROLE') || msg.includes('Missing')) {
+      console.error('[claim] getTokenForClaim: SUPABASE_SERVICE_ROLE_KEY is missing or invalid. Add it to .env.local and restart.')
+    } else {
+      console.error('getTokenForClaim error:', err)
+    }
     return null
   }
 }
@@ -120,6 +144,10 @@ export type SubmitClaimResult = { success: true } | { success: false; error: str
 
 /** Submit claim form (anonymous). Uses service role. Never throws – returns result with success/error. */
 export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
+  if (!hasServiceRoleKey()) {
+    console.error('[claim] submitClaim: SUPABASE_SERVICE_ROLE_KEY is missing. Add it to .env.local and restart.')
+    return { success: false, error: 'Something went wrong. Please try again later.' }
+  }
   try {
     const supabase = getSupabaseService()
     const tokenId = normalizeClaimTokenId(input.tokenId)
