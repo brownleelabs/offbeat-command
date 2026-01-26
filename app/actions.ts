@@ -64,21 +64,36 @@ export type SubmitClaimInput = {
   lng?: number | null
 }
 
+/** Normalize claim token ID from URL (strip %20, spaces, decode). */
+function normalizeClaimTokenId(raw: string): string {
+  let s = String(raw ?? '')
+  try {
+    s = decodeURIComponent(s)
+  } catch {
+    // leave as-is if decoding fails
+  }
+  return s.replace(/%20/g, '').replace(/\s+/g, ' ').trim()
+}
+
 /** Load token + campaign for claim page. Uses service role so anonymous users can open the claim form. Never throws – returns null on any error to avoid RSC digest leaks. */
 export async function getTokenForClaim(tokenId: string) {
   try {
     const supabase = getSupabaseService()
-    const id = tokenId.replace(/%20/g, '').trim()
+    const id = normalizeClaimTokenId(tokenId)
     if (!id) return null
 
     const { data: token, error: tokenErr } = await supabase
       .from('tokens')
       .select('id, campaign_id')
       .eq('id', id)
-      .single()
+      .maybeSingle()
 
-    if (tokenErr || !token) {
-      console.warn('getTokenForClaim token:', tokenErr?.message)
+    if (tokenErr) {
+      console.warn('getTokenForClaim error:', tokenErr.code, tokenErr.message, 'id=', id)
+      return null
+    }
+    if (!token) {
+      console.warn('getTokenForClaim: no token for id=', id)
       return null
     }
 
@@ -100,56 +115,74 @@ export async function getTokenForClaim(tokenId: string) {
   }
 }
 
-/** Submit claim form (anonymous). Uses service role so unauthenticated students can claim. */
-export async function submitClaim(input: SubmitClaimInput) {
-  const supabase = getSupabaseService()
-  const { tokenId, campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng } = input
+/** Result type for submitClaim – never throws, returns this instead. */
+export type SubmitClaimResult = { success: true } | { success: false; error: string }
 
-  const { data: token, error: tokenErr } = await supabase
-    .from('tokens')
-    .select('id, organization_id')
-    .eq('id', tokenId)
-    .single()
+/** Submit claim form (anonymous). Uses service role. Never throws – returns result with success/error. */
+export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
+  try {
+    const supabase = getSupabaseService()
+    const tokenId = normalizeClaimTokenId(input.tokenId)
+    const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng } = input
 
-  if (tokenErr || !token) {
-    console.error('submitClaim token fetch:', tokenErr)
-    throw new Error("Token not found.")
+    if (!tokenId) {
+      return { success: false, error: 'Token ID is missing.' }
+    }
+
+    const { data: token, error: tokenErr } = await supabase
+      .from('tokens')
+      .select('id, organization_id')
+      .eq('id', tokenId)
+      .maybeSingle()
+
+    if (tokenErr) {
+      console.error('submitClaim token fetch:', tokenErr)
+      return { success: false, error: 'Token not found.' }
+    }
+    if (!token) {
+      return { success: false, error: 'Token not found.' }
+    }
+
+    const orgId = (token as { organization_id?: string | null }).organization_id ?? null
+
+    const { error: insertErr } = await supabase.from('responses').insert({
+      token_id: tokenId,
+      campaign_id: campaignId ?? null,
+      organization_id: orgId,
+      first_name: firstName.trim(),
+      last_name: lastName.trim(),
+      student_id: studentId.trim(),
+      student_email: studentEmail.trim(),
+      venmo_username: venmoUsername.trim(),
+      custom_answers: Array.isArray(customAnswers) ? customAnswers : [],
+    })
+
+    if (insertErr) {
+      console.error('submitClaim responses insert:', insertErr)
+      return { success: false, error: insertErr.message || 'Could not save response.' }
+    }
+
+    const tokenUpdate: { status: 'found'; lat?: number; lng?: number } = { status: 'found' }
+    if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+      tokenUpdate.lat = lat
+      tokenUpdate.lng = lng
+    }
+
+    const { error: updateErr } = await supabase
+      .from('tokens')
+      .update(tokenUpdate)
+      .eq('id', tokenId)
+
+    if (updateErr) {
+      console.error('submitClaim token update:', updateErr)
+      return { success: false, error: updateErr.message || 'Could not update token.' }
+    }
+
+    return { success: true }
+  } catch (err) {
+    console.error('submitClaim error:', err)
+    const msg = err instanceof Error ? err.message : 'Submission failed.'
+    const safe = msg.includes('SERVICE_ROLE') || msg.includes('Missing') ? 'Something went wrong. Please try again later.' : msg
+    return { success: false, error: safe }
   }
-
-  const orgId = (token as { organization_id?: string | null }).organization_id ?? null
-
-  const { error: insertErr } = await supabase.from('responses').insert({
-    token_id: tokenId,
-    campaign_id: campaignId,
-    organization_id: orgId,
-    first_name: firstName.trim(),
-    last_name: lastName.trim(),
-    student_id: studentId.trim(),
-    student_email: studentEmail.trim(),
-    venmo_username: venmoUsername.trim(),
-    custom_answers: customAnswers,
-  })
-
-  if (insertErr) {
-    console.error('submitClaim responses insert:', insertErr)
-    throw new Error(insertErr.message)
-  }
-
-  const tokenUpdate: { status: 'found'; lat?: number; lng?: number } = { status: 'found' }
-  if (lat != null && lng != null) {
-    tokenUpdate.lat = lat
-    tokenUpdate.lng = lng
-  }
-
-  const { error: updateErr } = await supabase
-    .from('tokens')
-    .update(tokenUpdate)
-    .eq('id', tokenId)
-
-  if (updateErr) {
-    console.error('submitClaim token update:', updateErr)
-    throw new Error(updateErr.message)
-  }
-
-  return { success: true }
 }

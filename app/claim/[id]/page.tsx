@@ -48,8 +48,9 @@ export default function ClaimPage() {
   const [customAnswers, setCustomAnswers] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    const rawId = (params.id as string) ?? "";
-    if (!rawId) {
+    const rawId = Array.isArray(params.id) ? params.id[0] : (params.id ?? "");
+    const idStr = typeof rawId === "string" ? rawId : "";
+    if (!idStr) {
       setStatus("error");
       setErrorMsg("Invalid link. No token ID.");
       return;
@@ -58,7 +59,7 @@ export default function ClaimPage() {
     let cancelled = false;
     (async () => {
       try {
-        const result = await getTokenForClaim(rawId);
+        const result = await getTokenForClaim(idStr);
         if (cancelled) return;
         if (!result) {
           setStatus("error");
@@ -105,7 +106,7 @@ export default function ClaimPage() {
         answer: customAnswers[q.order]?.trim() ?? "",
       }));
 
-      await submitClaim({
+      const result = await submitClaim({
         tokenId,
         campaignId: campaign?.id ?? null,
         firstName: firstName.trim(),
@@ -118,7 +119,12 @@ export default function ClaimPage() {
         lng: coords?.lng ?? null,
       });
 
-      setStatus("success");
+      if (result.success) {
+        setStatus("success");
+      } else {
+        setStatus("error");
+        setErrorMsg(result.error || "Submission failed.");
+      }
     } catch (err: unknown) {
       setStatus("error");
       setErrorMsg(err instanceof Error ? err.message : "Submission failed.");
@@ -215,8 +221,8 @@ export default function ClaimPage() {
                   Survey questions
                 </h2>
                 <div className="space-y-3">
-                  {questions
-                    .sort((a, b) => a.order - b.order)
+                  {[...questions]
+                    .sort((a, b) => (a?.order ?? 0) - (b?.order ?? 0))
                     .map((q) => (
                       <div key={q.order}>
                         <label className="mb-1 block text-xs text-muted-foreground">
