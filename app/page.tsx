@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase";
 import MapView from "@/components/map-view";
+import { useDashboard, type ViewMode } from "@/components/dashboard-context";
 import type { Campaign, TokenWithCampaign } from "@/types";
 import type { CampaignQuestion } from "@/types";
 import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
@@ -23,6 +24,7 @@ function normalizeTokensWithCampaign(rows: unknown[]): TokenWithCampaign[] {
       lat: Number(lat),
       lng: Number(lng),
       status: (r.status === "found" ? "found" : "active") as "active" | "found",
+      organization_id: (r.organization_id as string) ?? null,
       campaign_id: (r.campaign_id as string) ?? null,
       campaigns: (r.campaigns as { name: string } | null) ?? null,
     };
@@ -30,6 +32,7 @@ function normalizeTokensWithCampaign(rows: unknown[]): TokenWithCampaign[] {
 }
 
 export default function AdminDashboard() {
+  const { viewMode, toggleViewMode, userRole, orgId } = useDashboard();
   const [activeTab, setActiveTab] = useState<Tab>("map");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [tokens, setTokens] = useState<TokenWithCampaign[]>([]);
@@ -39,42 +42,53 @@ export default function AdminDashboard() {
 
   const supabase = createClient();
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  async function loadData() {
-    const { data: cData } = await supabase
+  const loadData = useCallback(async () => {
+    let campaignsQuery = supabase
       .from("campaigns")
       .select("*")
       .is("deleted_at", null)
       .order("created_at", { ascending: false });
+    if (orgId != null) {
+      campaignsQuery = campaignsQuery.eq("organization_id", orgId);
+    }
+    const { data: cData } = await campaignsQuery;
     setCampaigns((cData as Campaign[]) ?? []);
 
-    // Load tokens: try with campaign join first; fall back to tokens-only if join fails
-    const { data: tData, error } = await supabase
+    let tokensQuery = supabase
       .from("tokens")
       .select("*, campaigns(name)")
       .order("id");
+    if (orgId != null) {
+      tokensQuery = tokensQuery.eq("organization_id", orgId);
+    }
+    const { data: tData, error } = await tokensQuery;
     if (!error && tData) {
       setTokens(normalizeTokensWithCampaign(tData));
     } else {
       if (error) {
         console.warn("Fleet join failed, loading tokens only:", error.message);
       }
-      const { data: tokensOnly } = await supabase
-        .from("tokens")
-        .select("*")
-        .order("id");
+      let tokensOnlyQuery = supabase.from("tokens").select("*").order("id");
+      if (orgId != null) {
+        tokensOnlyQuery = tokensOnlyQuery.eq("organization_id", orgId);
+      }
+      const { data: tokensOnly } = await tokensOnlyQuery;
       setTokens(normalizeTokensWithCampaign(tokensOnly ?? []));
     }
 
-    // Responses count: all rows (persists even when campaigns are archived)
-    const { count } = await supabase
+    let responsesQuery = supabase
       .from("responses")
       .select("*", { count: "exact", head: true });
+    if (orgId != null) {
+      responsesQuery = responsesQuery.eq("organization_id", orgId);
+    }
+    const { count } = await responsesQuery;
     setResponsesCount(count ?? 0);
-  }
+  }, [orgId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   async function assignTokens() {
     if (!targetCampaignId || selectedTokenIds.size === 0) return;
@@ -90,6 +104,17 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {userRole === "SUPER_ADMIN" && (
+        <div className="border-b border-accent/20 bg-muted p-2 text-center">
+          <button
+            type="button"
+            onClick={toggleViewMode}
+            className="text-xs font-mono text-primary"
+          >
+            VIEW MODE: {viewMode} (CLICK TO SWITCH)
+          </button>
+        </div>
+      )}
       <nav className="sticky top-0 z-50 flex items-center justify-between border-b border-accent bg-muted px-8 py-4">
         <h1 className="text-xl font-bold tracking-tighter text-primary">
           OFFBEAT COMMAND
@@ -132,9 +157,9 @@ export default function AdminDashboard() {
       </nav>
 
       <main className="p-0">
-        <ProjectStats
-          tokenCount={tokens.length}
-          foundCount={tokens.filter((t) => t.status === "found").length}
+        <ExecutiveStats
+          viewMode={viewMode}
+          tokens={tokens}
           responsesCount={responsesCount}
         />
         {activeTab === "map" && (
@@ -164,50 +189,76 @@ export default function AdminDashboard() {
   );
 }
 
-const PAYOUT_PER_RESPONSE = 25;
+/** Mock value per active token for Campus Liquidity (TENANT). */
+const MOCK_USD_PER_ACTIVE_TOKEN = 100;
+/** Mock 4.5% APY for Yield Earned (TENANT). */
+const TENANT_APY = 0.045;
 
-function ProjectStats({
-  tokenCount,
-  foundCount,
+function ExecutiveStats({
+  viewMode,
+  tokens,
   responsesCount,
 }: {
-  tokenCount: number;
-  foundCount: number;
+  viewMode: ViewMode;
+  tokens: TokenWithCampaign[];
   responsesCount: number;
 }) {
-  const progress = tokenCount > 0 ? (foundCount / tokenCount) * 100 : 0;
-  const totalPayout = responsesCount * PAYOUT_PER_RESPONSE;
+  const activeCount = tokens.filter((t) => t.status === "active").length;
+  const campusLiquidity =
+    activeCount * MOCK_USD_PER_ACTIVE_TOKEN;
+  const yieldEarned = Math.round(campusLiquidity * TENANT_APY);
+
+  if (viewMode === "GLOBAL") {
+    return (
+      <div className="grid grid-cols-1 gap-4 border-b border-accent bg-background/95 px-6 py-4 md:grid-cols-3">
+        <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+          <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Global AUM
+          </h3>
+          <p className="font-mono text-xl font-bold text-foreground">$1.2M</p>
+        </div>
+        <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+          <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Net Treasury Yield
+          </h3>
+          <p className="font-mono text-xl font-bold tabular-nums text-success">
+            +$4,250
+          </p>
+        </div>
+        <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+          <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Active Campuses
+          </h3>
+          <p className="font-mono text-xl font-bold text-primary">12</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 gap-4 border-b border-accent bg-background/95 px-6 py-4 md:grid-cols-3">
       <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
         <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-          Fleet Status
-        </h3>
-        <p className="mb-2 font-mono text-xl font-bold text-foreground">
-          {foundCount} / {tokenCount}
-        </p>
-        <div className="h-2 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-primary transition-all duration-500"
-            style={{ width: `${Math.min(progress, 100)}%` }}
-          />
-        </div>
-      </div>
-      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
-        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-          Research Participation
+          Campus Liquidity
         </h3>
         <p className="font-mono text-xl font-bold text-foreground">
-          {responsesCount.toLocaleString()} submission{responsesCount !== 1 ? "s" : ""}
+          ${campusLiquidity.toLocaleString("en-US")}
         </p>
       </div>
       <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
         <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-          Payout Liability
+          Yield Earned
         </h3>
         <p className="font-mono text-xl font-bold tabular-nums text-success">
-          ${totalPayout.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+          +${yieldEarned.toLocaleString("en-US")} (4.5% APY)
+        </p>
+      </div>
+      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          Active Fleet
+        </h3>
+        <p className="font-mono text-xl font-bold text-primary">
+          {activeCount}
         </p>
       </div>
     </div>

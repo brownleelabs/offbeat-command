@@ -6,7 +6,8 @@ import { MapPin, RefreshCw, Activity } from "lucide-react";
 import type { Token } from "@/types";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { resetDemo } from "@/app/actions"; // <--- This calls your new file
+import { useDashboard } from "@/components/dashboard-context";
+import { resetDemo } from "@/app/actions";
 
 // STARTING VIEW: UT Austin
 const INITIAL_VIEW_STATE = {
@@ -16,41 +17,49 @@ const INITIAL_VIEW_STATE = {
 };
 
 export default function MapView() {
+  const { orgId } = useDashboard();
   const [tokens, setTokens] = useState<Token[]>([]);
-  const [logs, setLogs] = useState<string[]>([]); 
+  const [logs, setLogs] = useState<string[]>([]);
   const [isReseting, setIsReseting] = useState(false);
 
-  // Initialize Supabase Client
   const supabase = createClient();
 
-  // 1. Fetch Initial Data
+  // 1. Fetch Initial Data (org-aware)
   useEffect(() => {
     async function fetchTokens() {
-      const { data } = await supabase.from("tokens").select("*");
+      let query = supabase.from("tokens").select("*");
+      if (orgId != null) {
+        query = query.eq("organization_id", orgId);
+      }
+      const { data } = await query;
       if (data) setTokens(data as Token[]);
     }
     fetchTokens();
-  }, []);
+  }, [orgId]);
 
-  // 2. The Realtime Listener
+  // 2. Realtime Listener (only apply updates for current org when orgId set)
   useEffect(() => {
     const channel = supabase
       .channel("tokens-demo")
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "tokens" },
-        (payload: any) => {
-          const newItem = payload.new as Token;
-          
-          // Update Map
+        (payload: { new: Token & { organization_id?: string | null } }) => {
+          const newItem = payload.new;
+          if (orgId != null && newItem.organization_id !== orgId) return;
+          const token: Token = {
+            id: newItem.id,
+            lat: newItem.lat,
+            lng: newItem.lng,
+            status: newItem.status,
+            organization_id: newItem.organization_id ?? null,
+          };
           setTokens((prev) =>
-            prev.map((t) => (t.id === newItem.id ? newItem : t))
+            prev.map((t) => (t.id === token.id ? token : t))
           );
-
-          // Update Ticker Log
-          if (newItem.status === "found") {
+          if (token.status === "found") {
             const time = new Date().toLocaleTimeString();
-            setLogs((prev) => [`[${time}] Asset ...${newItem.id.slice(-4)} FOUND`, ...prev]);
+            setLogs((prev) => [`[${time}] Asset ...${token.id.slice(-4)} FOUND`, ...prev]);
           }
         }
       )
@@ -59,7 +68,7 @@ export default function MapView() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [orgId]);
 
   // 3. The Reset Button Handler
   const handleReset = async () => {
