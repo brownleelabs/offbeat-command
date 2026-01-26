@@ -10,16 +10,17 @@ export default function ClaimPage() {
   const [errorMsg, setErrorMsg] = useState('')
 
   useEffect(() => {
-    // 1. Get ID and CLEAN IT (The Fix)
-    // .trim() removes the accidental %20 space at the end
     const rawId = params.id as string
     if (!rawId) return
-    
-    const id = rawId.trim() 
+
+    // THE FIX: Nuclear Cleaning
+    // 1. Replace literal "%20" text with nothing
+    // 2. Trim actual whitespace
+    const id = rawId.replace(/%20/g, '').trim()
 
     async function performClaim() {
       try {
-        console.log("Client: Connecting to DB with ID:", id)
+        console.log("Client: Cleaning ID...", rawId, "->", id)
         const supabase = createClient()
         
         const { data, error } = await supabase
@@ -31,7 +32,7 @@ export default function ClaimPage() {
         if (error) throw error
         
         if (!data || data.length === 0) {
-           throw new Error("ID not found in database. (Check ID match)")
+           throw new Error("ID not found (Check your database for " + id + ")")
         }
 
         setStatus('success')
