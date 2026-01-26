@@ -49,20 +49,41 @@ export default function ClaimPage() {
 
   useEffect(() => {
     const rawId = (params.id as string) ?? "";
-    if (!rawId) return;
+    if (!rawId) {
+      setStatus("error");
+      setErrorMsg("Invalid link. No token ID.");
+      return;
+    }
 
+    let cancelled = false;
     (async () => {
-      const result = await getTokenForClaim(rawId);
-      if (!result) {
+      try {
+        const result = await getTokenForClaim(rawId);
+        if (cancelled) return;
+        if (!result) {
+          setStatus("error");
+          setErrorMsg("Token not found. Check the link and try again.");
+          return;
+        }
+        const id = (result.token as { id: string }).id;
+        setTokenId(id);
+        if (result.campaign) setCampaign(result.campaign as Campaign);
+        setStatus("form");
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Claim load error:", err);
         setStatus("error");
-        setErrorMsg("Token not found. Check the link and try again.");
-        return;
+        const msg = err instanceof Error ? err.message : "";
+        setErrorMsg(
+          msg && (msg.includes("SERVICE_ROLE") || msg.includes("Missing"))
+            ? "Something went wrong. Please try again later."
+            : msg || "Something went wrong. Try again."
+        );
       }
-      const id = (result.token as { id: string }).id;
-      setTokenId(id);
-      if (result.campaign) setCampaign(result.campaign as Campaign);
-      setStatus("form");
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [params.id]);
 
   async function handleSubmit(e: React.FormEvent) {

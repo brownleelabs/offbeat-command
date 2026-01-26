@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
-import MapView from "@/components/map-view";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
+
+const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
 import type { Campaign, TokenWithCampaign } from "@/types";
 import type { CampaignQuestion } from "@/types";
 import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
