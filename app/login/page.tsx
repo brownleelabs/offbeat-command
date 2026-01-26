@@ -24,13 +24,15 @@ export default function LoginPage() {
       });
       if (err) {
         setError(err.message);
-        setLoading(false);
-        return;
+      } else {
+        // CRITICAL FIX: Refresh session state before navigation so cookie is ready for Dashboard
+        await supabase.auth.refreshSession();
+        router.push("/");
+        router.refresh();
       }
-      router.push("/");
-      router.refresh();
     } catch {
       setError("Something went wrong. Try again.");
+    } finally {
       setLoading(false);
     }
   }

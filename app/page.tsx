@@ -38,7 +38,7 @@ function isAdminRole(role: string | undefined): role is (typeof ADMIN_ROLES)[num
 }
 
 export default function AdminDashboard() {
-  const { viewMode, toggleViewMode, userRole, orgId, loading, profile } = useDashboard();
+  const { viewMode, toggleViewMode, userRole, orgId, loading, profile, authError } = useDashboard();
   const [orgName, setOrgName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("map");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -147,22 +147,46 @@ export default function AdminDashboard() {
     );
   }
 
-  // 2. Missing profile (authenticated but no profile row)
+  // 2. Missing profile or auth session error
   if (!profile) {
+    const isSessionMissing =
+      authError?.toLowerCase().includes("session missing") ?? false;
     return (
-      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-zinc-950 text-white">
-        <h1 className="text-xl font-bold text-red-500">NO PROFILE FOUND</h1>
-        <p className="text-zinc-400">User authenticated, but no profile row exists.</p>
-        <button
-          type="button"
-          onClick={() => {
-            createClient().auth.signOut();
-            window.location.href = "/login";
-          }}
-          className="rounded border border-zinc-700 px-4 py-2 hover:bg-zinc-800"
-        >
-          FORCE LOGOUT
-        </button>
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-zinc-950 px-4 text-center text-white">
+        {isSessionMissing ? (
+          <>
+            <h1 className="text-xl font-bold text-red-500">AUTH SESSION MISSING</h1>
+            <p className="max-w-md text-zinc-400">
+              Your browser or an extension (e.g. MetaMask, Lockdown) may be blocking
+              the auth session. Try: open this site in a private/incognito window, or
+              disable that extension for this site, then sign in again.
+            </p>
+            <a
+              href="/login"
+              className="rounded border border-zinc-700 px-4 py-2 hover:bg-zinc-800"
+            >
+              SIGN IN AGAIN
+            </a>
+          </>
+        ) : (
+          <>
+            <h1 className="text-xl font-bold text-red-500">NO PROFILE FOUND</h1>
+            <p className="text-zinc-400">User authenticated, but no profile row exists.</p>
+            {authError && (
+              <p className="text-xs text-zinc-500">Auth error: {authError}</p>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                createClient().auth.signOut();
+                window.location.href = "/login";
+              }}
+              className="rounded border border-zinc-700 px-4 py-2 hover:bg-zinc-800"
+            >
+              FORCE LOGOUT
+            </button>
+          </>
+        )}
       </div>
     );
   }
