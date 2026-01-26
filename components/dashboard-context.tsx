@@ -40,6 +40,8 @@ interface DashboardContextValue {
   setSelectedOrgId: (id: string | null) => void;
   profile: UserProfile | null;
   loading: boolean;
+  /** Set when auth failed (e.g. "Auth session missing!"); use to show session hint. */
+  authError: string | null;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -59,6 +61,7 @@ interface DashboardProviderProps {
 export function DashboardProvider({ children }: DashboardProviderProps) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("GLOBAL");
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
 
@@ -79,10 +82,12 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
 
         if (authError) {
           console.warn("[DashboardContext] Auth error:", authError.message);
+          setAuthError(authError.message);
           setProfile(null);
           setLoading(false);
           return;
         }
+        setAuthError(null);
         if (!user) {
           console.warn("[DashboardContext] No auth user");
           setProfile(null);
@@ -119,6 +124,7 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
 
         const raw = data as Record<string, unknown>;
         const role = isUserRole(raw.role) ? raw.role : "STUDENT";
+        setAuthError(null);
         setProfile({
           id: String(raw.id),
           email: String(raw.email ?? ""),
@@ -180,6 +186,7 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
       setSelectedOrgId,
       profile,
       loading,
+      authError,
     }),
     [
       profile,
@@ -188,6 +195,7 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
       effectiveToggleViewMode,
       selectedOrgId,
       loading,
+      authError,
     ]
   );
 
