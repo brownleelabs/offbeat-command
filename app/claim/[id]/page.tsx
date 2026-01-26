@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase' // Use the same connection as the map
+import { createClient } from '@/lib/supabase'
 
 export default function ClaimPage() {
   const params = useParams()
@@ -10,15 +10,18 @@ export default function ClaimPage() {
   const [errorMsg, setErrorMsg] = useState('')
 
   useEffect(() => {
-    const id = params.id as string
-    if (!id) return
+    // 1. Get ID and CLEAN IT (The Fix)
+    // .trim() removes the accidental %20 space at the end
+    const rawId = params.id as string
+    if (!rawId) return
+    
+    const id = rawId.trim() 
 
     async function performClaim() {
       try {
-        console.log("Client: Connecting to DB...")
+        console.log("Client: Connecting to DB with ID:", id)
         const supabase = createClient()
         
-        // Direct update (Works because we disabled RLS)
         const { data, error } = await supabase
           .from('tokens')
           .update({ status: 'found' })
@@ -27,13 +30,11 @@ export default function ClaimPage() {
 
         if (error) throw error
         
-        // Double check we actually hit a row
         if (!data || data.length === 0) {
-           throw new Error("ID not found. Is the chip programmed correctly?")
+           throw new Error("ID not found in database. (Check ID match)")
         }
 
         setStatus('success')
-        console.log("Client: Success!")
       } catch (err: any) {
         console.error("Claim failed:", err)
         setStatus('error')
