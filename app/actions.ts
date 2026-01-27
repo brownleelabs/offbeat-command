@@ -126,13 +126,8 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
     timestamp: new Date().toISOString(),
   })
 
-  // ENVIRONMENT CHECK: Fail fast with explicit error if Service Role Key is missing
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  // ENVIRONMENT CHECK: Fail fast with explicit error if env vars are missing
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  if (!serviceRoleKey) {
-    console.error('[submitClaim] ❌ MISSING SUPABASE_SERVICE_ROLE_KEY in production environment')
-    return { success: false, error: 'Server Error: Missing Service Role Key' }
-  }
   if (!supabaseUrl) {
     console.error('[submitClaim] ❌ MISSING NEXT_PUBLIC_SUPABASE_URL in production environment')
     return { success: false, error: 'Server Error: Missing Supabase URL' }
@@ -146,15 +141,32 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       return { success: false, error: 'Invalid Token ID format.' }
     }
     
-    const supabase = getSupabaseService()
+    // USE COOKIE-BASED CLIENT: Inject cookies from next/headers
+    const supabase = await createServerSupabase()
     if (!supabase) {
-      console.error('[submitClaim] ❌ getSupabaseService() returned null. Check env vars:', {
-        hasUrl: !!supabaseUrl,
-        hasKey: !!serviceRoleKey,
-        keyLength: serviceRoleKey?.length ?? 0,
-      })
-      return { success: false, error: 'Server Error: Missing Service Role Key' }
+      console.error('[submitClaim] ❌ createServerSupabase() returned null')
+      return { success: false, error: 'Server Error: Failed to initialize Supabase client' }
     }
+
+    // VERIFY USER: Check authentication before executing logic
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError) {
+      console.error('[submitClaim] ❌ Auth check failed:', {
+        message: authError.message,
+        name: authError.name,
+        status: authError.status,
+      })
+      return { success: false, error: 'Unauthorized: Authentication required' }
+    }
+    if (!user) {
+      console.error('[submitClaim] ❌ No user session found')
+      return { success: false, error: 'Unauthorized: Please log in to submit a claim' }
+    }
+
+    console.log('[submitClaim] ✅ User authenticated:', {
+      userId: user.id.slice(0, 8) + '...',
+      email: user.email,
+    })
 
     const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
 
@@ -195,6 +207,7 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         ...(typeof clientMetadata === 'object' ? clientMetadata : {}),
         _server: serverHeaders,
         _submitted_at: new Date().toISOString(),
+        _submitted_by_user_id: user.id, // Track which user submitted the claim
       }
 
       const { error: insertErr } = await supabase.from('responses').insert({
