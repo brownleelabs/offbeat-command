@@ -2,30 +2,29 @@ import { createClient } from "@supabase/supabase-js";
 import ClaimForm from "@/components/claim-form";
 import type { Campaign, Token } from "@/types";
 
+// STRICT REGEX: Anchors (^...$) prevent invalid IDs from hitting the DB
 const UUID_REGEX =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function isValidUUID(id: string): boolean {
+  return UUID_REGEX.test(id);
+}
 
 function normalizeClaimId(raw: string): string {
   let s = String(raw ?? "");
   try {
     s = decodeURIComponent(s);
   } catch {
-    // leave as-is if decoding fails
+    // leave as-is
   }
   s = s.replace(/%20/g, "").replace(/\s+/g, " ").trim();
-  // Extract UUID pattern (without anchors for extraction, but validate with anchors later)
-  const uuidPattern = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/i;
-  const match = s.match(uuidPattern);
+  
+  // Extract UUID if present
+  const match = s.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
   if (match) return match[0].toLowerCase();
   return s;
 }
 
-/** Strict UUID validation - returns true only if the string is exactly a valid UUID. */
-function isValidUUID(id: string): boolean {
-  return UUID_REGEX.test(id);
-}
-
-// Lazy load helper – prevents "supabaseKey is required" crash at startup
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -46,30 +45,28 @@ function getSupabaseAdmin() {
 async function getTokenForClaim(
   id: string
 ): Promise<{ token: Token; campaign: Campaign | null } | null> {
-  // SAFETY 1: Fail Fast - Strict UUID validation before ANY database call
-  if (!UUID_REGEX.test(id)) {
-    console.warn(`⚠️ [Claim] Invalid UUID format: ${id}`);
-    return null;
+  // 1. FAIL FAST: If it's not a UUID, return null immediately.
+  if (!isValidUUID(id)) {
+     console.warn(`⚠️ [Claim] Invalid UUID format: ${id}`);
+     return null;
   }
 
-  // SAFETY 2: Initialize Supabase client (no DB call yet)
   const supabaseAdmin = getSupabaseAdmin();
   if (!supabaseAdmin) {
-    console.error("❌ [Claim] Service Role Client failed to initialize.");
+    console.error("❌ [Claim] Client init failed.");
     return null;
   }
 
-  // SAFETY 3: Crash Protection - Wrap ALL database operations in try/catch
+  // 2. CRASH PROTECTION: Wrap the DB call in try/catch
   try {
-    // Query tokens table
-    const { data: token, error: tokenError } = await supabaseAdmin
+    const { data: token, error } = await supabaseAdmin
       .from("tokens")
       .select("id, lat, lng, status, organization_id, campaign_id")
       .eq("id", id)
       .maybeSingle();
 
-    if (tokenError) {
-      console.error("❌ [Claim] Token query error:", tokenError.message);
+    if (error) {
+      console.error("❌ [Claim] DB Error:", error.message);
       return null;
     }
 
@@ -78,7 +75,6 @@ async function getTokenForClaim(
       return null;
     }
 
-    // Map token data safely
     const tokenData: Token = {
       id: token.id,
       lat: Number(token.lat) || 0,
@@ -87,35 +83,22 @@ async function getTokenForClaim(
       organization_id: token.organization_id ?? null,
     };
 
-    // Fetch campaign if token has one (also wrapped in try/catch for safety)
-    const campaignId = token.campaign_id ?? null;
+    // Fetch campaign safely
     let campaign: Campaign | null = null;
-
-    if (campaignId) {
-      try {
-        const { data: camp, error: campError } = await supabaseAdmin
-          .from("campaigns")
-          .select("*")
-          .eq("id", campaignId)
-          .maybeSingle(); // Use maybeSingle() instead of single() to avoid throwing
-
-        if (!campError && camp) {
-          campaign = camp as Campaign;
-        } else if (campError) {
-          console.warn("⚠️ [Claim] Campaign fetch error (non-fatal):", campError.message);
-          // Continue without campaign - token is still valid
-        }
-      } catch (campErr) {
-        console.warn("⚠️ [Claim] Campaign fetch exception (non-fatal):", campErr);
-        // Continue without campaign - token is still valid
-      }
+    if (token.campaign_id) {
+      const { data: camp } = await supabaseAdmin
+        .from("campaigns")
+        .select("*")
+        .eq("id", token.campaign_id)
+        .single();
+      if (camp) campaign = camp as Campaign;
     }
 
     return { token: tokenData, campaign };
+
   } catch (err) {
-    // Catch ANY exception from database operations
-    console.error("🔥 [Claim] CRITICAL DB EXCEPTION:", err);
-    return null; // Return null instead of crashing - NEVER throw
+    console.error("🔥 [Claim] CRITICAL EXCEPTION:", err);
+    return null; // Return null instead of crashing
   }
 }
 
@@ -127,47 +110,24 @@ export default async function ClaimPage({
   const { id } = await params;
   const rawId = Array.isArray(id) ? id[0] : id ?? "";
   const normalizedId = normalizeClaimId(rawId);
-
-  if (!rawId) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="text-2xl font-bold text-red-500">INVALID LINK</h1>
-        <p className="mt-4 text-zinc-400">No token ID in the URL.</p>
-      </div>
-    );
+  
+  if (!normalizedId) {
+    return <ErrorScreen title="INVALID LINK" msg="No token ID provided." />;
   }
 
-  // 1. Detect configuration error (key missing) before calling getTokenForClaim
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="text-2xl font-bold text-red-500">CONFIGURATION ERROR</h1>
-        <p className="mt-4 text-zinc-400">
-          The server is missing the <code className="rounded bg-zinc-800 px-1">SUPABASE_SERVICE_ROLE_KEY</code>.
-        </p>
-        <p className="mt-2 text-sm text-zinc-500">Check .env.local and restart server.</p>
-      </div>
-    );
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return <ErrorScreen title="CONFIG ERROR" msg="Missing Service Role Key." />;
   }
 
-  // Pass normalized ID to the safe function
+  // Now this call is SAFE and won't throw 500
   const result = await getTokenForClaim(normalizedId);
 
-  // 2. Token not found (or DB error)
   if (!result) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="mb-4 text-4xl font-bold text-red-500">TOKEN NOT FOUND</h1>
-        <p className="max-w-md text-center text-zinc-400">
-          The token ID is invalid or could not be retrieved.
-        </p>
-      </div>
-    );
+    return <ErrorScreen title="TOKEN NOT FOUND" msg="ID is invalid or does not exist." />;
   }
 
   const { token, campaign } = result;
 
-  // 3. Already claimed check
   if (token.status === "found") {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
@@ -177,41 +137,20 @@ export default async function ClaimPage({
     );
   }
 
-  // 4. Token has no campaign (Unassigned) – block claim
-  if (!campaign) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="text-xl font-bold text-amber-500">This asset is not currently active.</h1>
-        <p className="mt-2 max-w-md text-center text-zinc-400">
-          This token is not assigned to a campaign. Contact the organizer if you believe this is an error.
-        </p>
-      </div>
-    );
-  }
-
-  // 5. Campaign is archived – block claim
-  if ((campaign as Campaign & { deleted_at?: string | null }).deleted_at) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="text-xl font-bold text-amber-500">This campaign has ended.</h1>
-        <p className="mt-2 max-w-md text-center text-zinc-400">
-          Submissions are no longer accepted for this campaign.
-        </p>
-      </div>
-    );
-  }
-
-  // Pass plain serializable props to avoid RSC digest errors (Supabase rows can have non-plain values)
-  const campaignPlain =
-    campaign === null
-      ? null
-      : (JSON.parse(JSON.stringify(campaign)) as Campaign);
-
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-black p-4">
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 backdrop-blur-xl">
-        <ClaimForm tokenId={token.id} campaign={campaignPlain} />
+        <ClaimForm tokenId={token.id} campaign={campaign} />
       </div>
     </main>
+  );
+}
+
+function ErrorScreen({ title, msg }: { title: string; msg: string }) {
+  return (
+    <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
+      <h1 className="mb-4 text-4xl font-bold text-red-500">{title}</h1>
+      <p className="max-w-md text-center text-zinc-400">{msg}</p>
+    </div>
   );
 }
