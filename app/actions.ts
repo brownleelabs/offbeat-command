@@ -23,6 +23,13 @@ function isValidUUID(id: string): boolean {
   return UUID_REGEX.test(id)
 }
 
+/**
+ * Normalizes a token ID from URL params or form input.
+ * Handles URL encoding, whitespace, and extracts UUID pattern.
+ * 
+ * NOTE: This function behaves identically in production and local environments.
+ * The regex pattern extraction is deterministic and does not depend on environment variables.
+ */
 function normalizeClaimTokenId(raw: string): string {
   let s = String(raw ?? '')
   try { s = decodeURIComponent(s) } catch {}
@@ -111,13 +118,35 @@ export async function resetDemo(
 // Types moved to lib/actions-constants.ts
 
 export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
+  // ENVIRONMENT CHECK: Fail fast with explicit error if Service Role Key is missing
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  if (!serviceRoleKey) {
+    console.error('[submitClaim] ❌ MISSING SUPABASE_SERVICE_ROLE_KEY in production environment')
+    return { success: false, error: 'Server Error: Missing Service Role Key' }
+  }
+  if (!supabaseUrl) {
+    console.error('[submitClaim] ❌ MISSING NEXT_PUBLIC_SUPABASE_URL in production environment')
+    return { success: false, error: 'Server Error: Missing Supabase URL' }
+  }
+
   try {
     const tokenId = normalizeClaimTokenId(input.tokenId)
     // SAFETY: Fail fast before ANY Supabase call
-    if (!tokenId || !isValidUUID(tokenId)) return { success: false, error: 'Invalid Token ID format.' }
-    if (!hasServiceRoleKey()) return { success: false, error: 'Server configuration error.' }
+    if (!tokenId || !isValidUUID(tokenId)) {
+      console.error('[submitClaim] Invalid token ID format:', { tokenId, raw: input.tokenId })
+      return { success: false, error: 'Invalid Token ID format.' }
+    }
+    
     const supabase = getSupabaseService()
-    if (!supabase) return { success: false, error: 'Server configuration error.' }
+    if (!supabase) {
+      console.error('[submitClaim] ❌ getSupabaseService() returned null. Check env vars:', {
+        hasUrl: !!supabaseUrl,
+        hasKey: !!serviceRoleKey,
+        keyLength: serviceRoleKey?.length ?? 0,
+      })
+      return { success: false, error: 'Server Error: Missing Service Role Key' }
+    }
 
     const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
 
@@ -129,7 +158,13 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         .maybeSingle()
 
       if (tokenErr) {
-        console.error('[submitClaim] token lookup error:', tokenErr.message)
+        console.error('[submitClaim] ❌ Token lookup error:', {
+          message: tokenErr.message,
+          details: tokenErr.details,
+          hint: tokenErr.hint,
+          code: tokenErr.code,
+          tokenId,
+        })
         return { success: false, error: 'Token lookup failed.' }
       }
       if (!token) return { success: false, error: 'Token not found.' }
@@ -168,7 +203,14 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       })
 
       if (insertErr) {
-        console.error('[submitClaim] response insert error:', insertErr.message)
+        console.error('[submitClaim] ❌ Response insert error:', {
+          message: insertErr.message,
+          details: insertErr.details,
+          hint: insertErr.hint,
+          code: insertErr.code,
+          tokenId,
+          campaignId,
+        })
         return { success: false, error: 'Could not save response.' }
       }
 
@@ -190,11 +232,25 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
 
       return { success: true }
     } catch (err) {
-      console.error('[submitClaim] DB exception:', err)
+      console.error('[submitClaim] ❌ DB exception (inner catch):', {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        name: err instanceof Error ? err.name : typeof err,
+        tokenId: input.tokenId,
+      })
       return { success: false, error: 'Something went wrong.' }
     }
   } catch (err) {
-    console.error('[submitClaim] Unexpected error:', err)
+    console.error('[submitClaim] ❌ Unexpected error (outer catch):', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      name: err instanceof Error ? err.name : typeof err,
+      input: {
+        tokenId: input.tokenId,
+        campaignId: input.campaignId,
+        studentEmail: input.studentEmail,
+      },
+    })
     return { success: false, error: 'Something went wrong.' }
   }
 }
