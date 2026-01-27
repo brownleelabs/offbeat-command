@@ -240,12 +240,13 @@ export default function AdminDashboard() {
                 campaigns = null;
                 // Fetch new campaign data asynchronously (only if campaign_id is not null)
                 if (token.campaign_id) {
-                  supabase
-                    .from("campaigns")
-                    .select("name")
-                    .eq("id", token.campaign_id)
-                    .single()
-                    .then(({ data }) => {
+                  (async () => {
+                    try {
+                      const { data } = await supabase
+                        .from("campaigns")
+                        .select("name")
+                        .eq("id", token.campaign_id)
+                        .single();
                       if (data) {
                         setTokens((current) => {
                           const currentIdx = current.findIndex((t) => t.id === token.id);
@@ -261,10 +262,10 @@ export default function AdminDashboard() {
                           return current;
                         });
                       }
-                    })
-                    .catch((err) => {
+                    } catch (err) {
                       console.warn("[Fleet] Failed to fetch campaign for updated token:", err);
-                    });
+                    }
+                  })();
                 }
                 // If campaign_id is null (unassigned), campaigns stays null (correct)
               } else {
