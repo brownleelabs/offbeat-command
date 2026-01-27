@@ -68,6 +68,14 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
   const tapOpenedAt = useMemo(() => new Date().toISOString(), []);
 
   async function handleSubmit(e: React.FormEvent) {
+    // LOG: Rocket log at the VERY BEGINNING to verify click is registered
+    console.log('[ClaimForm] 🚀 Calling submitClaim server action:', {
+      tokenId: tokenId.slice(0, 8) + '...',
+      campaignId: campaign?.id ? campaign.id.slice(0, 8) + '...' : 'null',
+      studentEmail,
+      timestamp: new Date().toISOString(),
+    })
+
     e.preventDefault();
     setStatus("submitting");
     setSubmitPhase("location");
@@ -102,7 +110,13 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         lat: coords?.lat ?? null,
         lng: coords?.lng ?? null,
         claimMetadata,
-      });
+      })
+
+      console.log('[ClaimForm] 📥 Server action response:', {
+        success: result.success,
+        error: result.success ? undefined : result.error,
+        timestamp: new Date().toISOString(),
+      })
 
       if (result.success) {
         setStatus("success");
@@ -111,6 +125,11 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         setErrorMsg(result.error || "Submission failed.");
       }
     } catch (err: unknown) {
+      console.error('[ClaimForm] ❌ Exception calling submitClaim:', {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        timestamp: new Date().toISOString(),
+      })
       setStatus("error");
       setErrorMsg(err instanceof Error ? err.message : "Submission failed.");
     }
@@ -150,10 +169,11 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="mb-1 block text-xs text-muted-foreground">
+          <label htmlFor="claim-first-name" className="mb-1 block text-xs text-muted-foreground">
             {CAMPAIGN_REQUIRED_FIELDS.find((f) => f.key === "first_name")?.label}
           </label>
           <input
+            id="claim-first-name"
             type="text"
             required
             value={firstName}
@@ -163,10 +183,11 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-muted-foreground">
+          <label htmlFor="claim-last-name" className="mb-1 block text-xs text-muted-foreground">
             {CAMPAIGN_REQUIRED_FIELDS.find((f) => f.key === "last_name")?.label}
           </label>
           <input
+            id="claim-last-name"
             type="text"
             required
             value={lastName}
@@ -176,8 +197,9 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-muted-foreground">Student ID</label>
+          <label htmlFor="claim-student-id" className="mb-1 block text-xs text-muted-foreground">Student ID</label>
           <input
+            id="claim-student-id"
             type="text"
             required
             value={studentId}
@@ -187,8 +209,9 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-muted-foreground">Student email</label>
+          <label htmlFor="claim-student-email" className="mb-1 block text-xs text-muted-foreground">Student email</label>
           <input
+            id="claim-student-email"
             type="email"
             required
             value={studentEmail}
@@ -198,8 +221,9 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs text-muted-foreground">Venmo username</label>
+          <label htmlFor="claim-venmo-username" className="mb-1 block text-xs text-muted-foreground">Venmo username</label>
           <input
+            id="claim-venmo-username"
             type="text"
             required
             value={venmoUsername}
@@ -215,24 +239,28 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
             <div className="space-y-3">
               {[...questions]
                 .sort((a, b) => (a?.order ?? 0) - (b?.order ?? 0))
-                .map((q) => (
-                  <div key={q.order}>
-                    <label className="mb-1 block text-xs text-muted-foreground">
-                      {q.text}
-                    </label>
-                    <input
-                      type="text"
-                      value={customAnswers[q.order] ?? ""}
-                      onChange={(e) =>
-                        setCustomAnswers((prev) => ({
-                          ...prev,
-                          [q.order]: e.target.value,
-                        }))
-                      }
-                      className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
-                    />
-                  </div>
-                ))}
+                .map((q) => {
+                  const inputId = `claim-question-${q.order}`;
+                  return (
+                    <div key={q.order}>
+                      <label htmlFor={inputId} className="mb-1 block text-xs text-muted-foreground">
+                        {q.text}
+                      </label>
+                      <input
+                        id={inputId}
+                        type="text"
+                        value={customAnswers[q.order] ?? ""}
+                        onChange={(e) =>
+                          setCustomAnswers((prev) => ({
+                            ...prev,
+                            [q.order]: e.target.value,
+                          }))
+                        }
+                        className="w-full rounded border border-accent bg-muted px-3 py-2 text-sm"
+                      />
+                    </div>
+                  );
+                })}
             </div>
           </div>
         )}
