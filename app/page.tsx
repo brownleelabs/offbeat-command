@@ -190,7 +190,7 @@ export default function AdminDashboard() {
     }
     const { count } = await responsesQuery;
     setResponsesCount(count ?? 0);
-  }, [dataScopeOrgId, showArchivedCampaigns, supabase]);
+  }, [dataScopeOrgId, showArchivedCampaigns]);
 
   useEffect(() => {
     loadData();
