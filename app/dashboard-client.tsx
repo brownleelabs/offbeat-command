@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Box } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
 
@@ -588,14 +589,14 @@ function ExecutiveStats({
 
   if (viewMode === "GLOBAL") {
     return (
-      <div className="grid grid-cols-1 gap-4 border-b border-accent bg-background/95 px-6 py-4 md:grid-cols-3">
-        <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+      <div className="grid grid-cols-1 gap-4 border-b border-white/10 bg-background/95 px-12 py-6 md:grid-cols-3">
+        <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
           <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
             Global AUM
           </h3>
           <p className="font-mono text-xl font-bold text-foreground">$1.2M</p>
         </div>
-        <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+        <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
           <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
             Net Treasury Yield
           </h3>
@@ -603,7 +604,7 @@ function ExecutiveStats({
             +$4,250
           </p>
         </div>
-        <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+        <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
           <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
             Active Campuses
           </h3>
@@ -614,8 +615,8 @@ function ExecutiveStats({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 border-b border-accent bg-background/95 px-6 py-4 md:grid-cols-3">
-      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+    <div className="grid grid-cols-1 gap-4 border-b border-white/10 bg-background/95 px-12 py-6 md:grid-cols-3">
+      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
         <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Campus Liquidity
         </h3>
@@ -623,7 +624,7 @@ function ExecutiveStats({
           ${campusLiquidity.toLocaleString("en-US")}
         </p>
       </div>
-      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
         <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Yield Earned
         </h3>
@@ -631,7 +632,7 @@ function ExecutiveStats({
           +${yieldEarned.toLocaleString("en-US")} (4.5% APY)
         </p>
       </div>
-      <div className="rounded-xl border border-accent bg-muted p-4 backdrop-blur-sm">
+      <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
         <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Active Fleet
         </h3>
@@ -696,18 +697,17 @@ function FleetTab({
   const canAssignToSchool = isSuperAdmin || (userRole === "ORG_ADMIN" && !!profile?.organization_id);
 
   return (
-    <div className="mx-auto max-w-7xl p-8">
-      <div className="mb-6 flex flex-shrink-0 flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <h2 className="text-2xl font-bold">Fleet Management</h2>
-        </div>
+    <div className="mx-auto max-w-7xl p-12 font-sans">
+      {/* Control Bar — 8px rhythm, island strategy */}
+      <div className="mb-6 flex h-20 w-full flex-shrink-0 items-center justify-between border-b border-white/10 bg-gradient-to-r from-slate-900 to-slate-950">
+        <h2 className="text-2xl font-bold">Fleet Management</h2>
         <div className="flex flex-wrap items-center gap-6">
           {showFleetWrite && (
-            <div className="flex items-center gap-3 border-r border-accent pr-6">
+            <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-white/5 p-1.5 pr-2">
               <select
                 value={targetCampaignId}
                 onChange={(e) => setTargetCampaignId(e.target.value)}
-                className="w-64 min-w-[16rem] rounded border border-accent bg-muted px-3 py-2 text-sm"
+                className="h-9 w-64 min-w-[14rem] rounded border border-white/5 bg-black/20 text-sm focus:ring-2 focus:ring-primary/20"
               >
                 <option value="">Select Campaign to Assign...</option>
                 <option value="__unassign__">Clear Campaign (Unassigned)</option>
@@ -720,20 +720,20 @@ function FleetTab({
               <button
                 onClick={onAssign}
                 disabled={!targetCampaignId || selectedTokenIds.size === 0}
-                className="rounded bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-50"
+                className="h-9 rounded bg-primary px-4 text-sm font-medium tracking-wide text-primary-foreground disabled:opacity-50"
               >
                 Set Campaign
               </button>
             </div>
           )}
           {canAssignToSchool && (
-            <div className="flex items-center gap-3 border-r border-accent pr-6">
+            <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-white/5 p-1.5 pr-2">
               {isSuperAdmin && (
                 <>
                   <select
                     value={targetSchoolId}
                     onChange={(e) => setTargetSchoolId(e.target.value)}
-                    className="w-64 min-w-[16rem] rounded border border-accent bg-muted px-3 py-2 text-sm"
+                    className="h-9 w-64 min-w-[14rem] rounded border border-white/5 bg-black/20 text-sm focus:ring-2 focus:ring-primary/20"
                     title="Assign selected tokens to an organization"
                   >
                     <option value="">Select organization...</option>
@@ -744,7 +744,7 @@ function FleetTab({
                     ))}
                   </select>
                   {organizations.length === 0 && (
-                    <span className="text-xs text-amber-600 dark:text-amber-400" title="Add organizations in Supabase (see docs).">
+                    <span className="text-xs text-amber-500" title="Add organizations in Supabase (see docs).">
                       No organizations — add in Supabase
                     </span>
                   )}
@@ -753,20 +753,18 @@ function FleetTab({
               <button
                 onClick={onAssignToSchool}
                 disabled={!targetSchoolId || selectedTokenIds.size === 0}
-                className="rounded border-2 border-amber-600 bg-amber-600/10 px-4 py-2 text-sm font-bold text-amber-700 hover:bg-amber-600/20 disabled:opacity-50 dark:border-amber-500 dark:text-amber-400 dark:hover:bg-amber-500/20"
+                className="h-9 rounded border border-amber-500/50 px-4 text-sm font-medium text-amber-500 hover:bg-amber-500/10 disabled:opacity-50"
               >
                 Transfer Fleet
               </button>
             </div>
           )}
-          <div className="flex items-center">
-            <button
-              onClick={onRefresh}
-              className="rounded border border-accent px-4 py-2 text-sm hover:bg-muted/50"
-            >
-              Refresh
-            </button>
-          </div>
+          <button
+            onClick={onRefresh}
+            className="h-9 rounded border border-white/10 px-4 text-sm hover:bg-white/5"
+          >
+            Refresh
+          </button>
         </div>
       </div>
 
@@ -782,57 +780,69 @@ function FleetTab({
         </div>
       )}
 
-      <table className="w-full border-collapse text-left">
-        <thead className="border-b border-accent text-xs uppercase text-muted-foreground">
-          <tr>
-            <th className="p-4">
-              <input
-                type="checkbox"
-                checked={tokens.length > 0 && selectedTokenIds.size === tokens.length}
-                onChange={(e) => toggleAll(e.target.checked)}
-              />
-            </th>
-            {showOrgColumn && <th className="p-4">Organization</th>}
-            <th className="p-4">Asset ID</th>
-            <th className="p-4">Coordinates</th>
-            <th className="p-4">Active Campaign</th>
-            <th className="p-4 text-right">Status</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-accent text-sm">
-          {tokens.map((t) => (
-            <tr key={t.id} className="hover:bg-muted/50">
-              <td className="p-4">
-                <input
-                  type="checkbox"
-                  checked={selectedTokenIds.has(t.id)}
-                  onChange={() => toggleOne(t.id)}
-                  disabled={isAuditor}
-                />
-              </td>
-              {showOrgColumn && (
-                <td className="p-4">
-                  <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    {t.organizations?.name ?? "—"}
-                  </span>
-                </td>
-              )}
-              <td className="font-mono p-4">...{t.id.slice(-8)}</td>
-              <td className="p-4 text-muted-foreground">
-                {t.lat.toFixed(4)}, {t.lng.toFixed(4)}
-              </td>
-              <td className="p-4 font-bold text-success">
-                {t.campaigns?.name ?? "Unassigned"}
-              </td>
-              <td className="p-4 text-right">
-                <span className="rounded bg-muted px-2 py-1 font-bold text-[10px] uppercase">
-                  {t.status}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {/* Level 1 surface — table card */}
+      <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-900/50">
+        {tokens.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+            <Box className="h-12 w-12 text-muted-foreground/60" strokeWidth={1.25} />
+            <p className="text-sm text-muted-foreground">No assets assigned to this sector.</p>
+          </div>
+        ) : (
+          <table className="w-full border-collapse text-left text-sm">
+            <thead className="border-b border-white/10 text-xs uppercase text-muted-foreground">
+              <tr>
+                <th className="p-4">
+                  <input
+                    type="checkbox"
+                    checked={tokens.length > 0 && selectedTokenIds.size === tokens.length}
+                    onChange={(e) => toggleAll(e.target.checked)}
+                    className="rounded border-border"
+                  />
+                </th>
+                {showOrgColumn && <th className="p-4">Organization</th>}
+                <th className="p-4">Asset ID</th>
+                <th className="p-4">Coordinates</th>
+                <th className="p-4">Active Campaign</th>
+                <th className="p-4 text-right">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/10">
+              {tokens.map((t) => (
+                <tr key={t.id} className="hover:bg-white/5">
+                  <td className="p-4">
+                    <input
+                      type="checkbox"
+                      checked={selectedTokenIds.has(t.id)}
+                      onChange={() => toggleOne(t.id)}
+                      disabled={isAuditor}
+                      className="rounded border-border"
+                    />
+                  </td>
+                  {showOrgColumn && (
+                    <td className="p-4">
+                      <span className="rounded bg-white/5 px-2 py-0.5 text-xs text-muted-foreground">
+                        {t.organizations?.name ?? "—"}
+                      </span>
+                    </td>
+                  )}
+                  <td className="p-4 font-mono text-xs">...{t.id.slice(-8)}</td>
+                  <td className="p-4 font-mono text-xs text-muted-foreground">
+                    {t.lat.toFixed(4)}, {t.lng.toFixed(4)}
+                  </td>
+                  <td className="p-4 font-bold text-success">
+                    {t.campaigns?.name ?? "Unassigned"}
+                  </td>
+                  <td className="p-4 text-right">
+                    <span className="rounded bg-white/5 px-2 py-1 font-mono text-[10px] font-bold uppercase">
+                      {t.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
@@ -925,60 +935,68 @@ function CampaignsTab({
   const requiredCount = CAMPAIGN_REQUIRED_FIELDS.length;
 
   return (
-    <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 p-8 md:grid-cols-3">
+    <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 p-12 font-sans lg:grid-cols-12">
       {campaignsWrite && (
-      <div className="flex flex-col rounded-xl border border-accent bg-muted p-6 md:col-span-1">
-        <h2 className="mb-4 text-xl font-bold">Create Campaign</h2>
-        <div className="grid flex-1 grid-cols-1 gap-8 md:grid-cols-2 md:gap-8">
-          <div className="space-y-4">
-            {/* Column 1: Details – Organization, Name, Required fields */}
-            {userRole === "SUPER_ADMIN" && orgId === null && (
-              <>
-                <label className="block text-sm text-muted-foreground">Organization</label>
-                <select
-                  value={createOrgId}
-                  onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
-                  className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
-                >
-                  <option value="">Select organization...</option>
-                  {organizations.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
+      <div className="flex flex-col lg:col-span-5">
+        <h2 className="mb-6 text-xl font-bold">Create Campaign</h2>
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
+          {/* Left column — Logistics (Terms) */}
+          <div className="rounded-xl border border-border bg-card p-6 lg:col-span-5">
+            <fieldset className="space-y-6">
+              <legend className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Logistics
+              </legend>
+              {userRole === "SUPER_ADMIN" && orgId === null && (
+                <div className="space-y-2">
+                  <label className="block text-sm text-muted-foreground">Organization</label>
+                  <select
+                    value={createOrgId}
+                    onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
+                    className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="">Select organization...</option>
+                    {organizations.map((o) => (
+                      <option key={o.id} value={o.id}>{o.name}</option>
+                    ))}
+                  </select>
+                  {organizations.length === 0 && (
+                    <p className="text-xs text-amber-500">
+                      No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
+                    </p>
+                  )}
+                </div>
+              )}
+              <div className="space-y-2">
+                <label className="block text-sm text-muted-foreground">Campaign name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Austin Q1 Survey"
+                  className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+              {/* Required fields — Digital Receipt style */}
+              <div className="rounded-r-md border-l-2 border-emerald-500 bg-emerald-950/30 p-4 font-mono text-xs text-emerald-400">
+                <h3 className="mb-2 font-semibold uppercase tracking-wider">
+                  Required fields (reward payout)
+                </h3>
+                <ul className="space-y-1.5">
+                  {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
+                    <li key={f.key} className="flex items-center gap-2">
+                      <span className="text-emerald-400">✓</span>
+                      {f.label}
+                    </li>
                   ))}
-                </select>
-                {organizations.length === 0 && (
-                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                    No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
-                  </p>
-                )}
-              </>
-            )}
-            <div className="rounded-lg border border-success/30 bg-background/95 p-3">
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-success">
-                Required fields (reward payout)
-              </h3>
-              <ul className="space-y-1.5 text-sm text-accent">
-                {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
-                  <li key={f.key} className="flex items-center gap-2">
-                    <span className="text-success">✓</span>
-                    {f.label}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2 text-[10px] text-muted-foreground">
-                Collected for every response; used for payouts.
-              </p>
-            </div>
-            <label className="block text-sm text-muted-foreground">Campaign name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Austin Q1 Survey"
-              className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
-            />
+                </ul>
+                <p className="mt-2 text-muted-foreground">
+                  Collected for every response; used for payouts.
+                </p>
+              </div>
+            </fieldset>
           </div>
-          <div className="space-y-4">
-            {/* Column 2: Config – Additional questions */}
+          {/* Right column — Questions (Content) */}
+          <div className="space-y-4 lg:col-span-7">
             <div className="flex items-center justify-between">
               <label className="text-sm text-muted-foreground">
                 Additional questions (up to {MAX_QUESTIONS})
@@ -993,42 +1011,47 @@ function CampaignsTab({
                 </button>
               )}
             </div>
-            {questions.map((q, i) => (
-              <div key={i} className="flex gap-2">
-                <input
-                  type="text"
-                  value={q}
-                  onChange={(e) => setQuestion(i, e.target.value)}
-                  placeholder={`Question ${i + 1}`}
-                  className="flex-1 rounded border border-accent bg-background px-3 py-2 text-sm"
-                />
-                {questions.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeQuestion(i)}
-                    className="text-destructive hover:underline"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
+            <div className="space-y-4">
+              {questions.map((q, i) => (
+                <div
+                  key={i}
+                  className="group relative flex gap-2 rounded-md transition-colors hover:bg-white/5"
+                >
+                  <input
+                    type="text"
+                    value={q}
+                    onChange={(e) => setQuestion(i, e.target.value)}
+                    placeholder={`Question ${i + 1}`}
+                    className="h-10 flex-1 rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
+                  />
+                  {questions.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeQuestion(i)}
+                      className="text-destructive hover:underline"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
         {createError && <p className="mt-4 text-sm text-destructive">{createError}</p>}
-        <div className="mt-6 border-t border-accent pt-6">
+        <div className="mt-8 flex justify-end border-t border-white/10 pt-8">
           <button
             onClick={createCampaign}
             disabled={saving || !name.trim() || (orgId === null && !createOrgId)}
-            className="w-full rounded bg-primary py-2.5 font-bold text-primary-foreground disabled:opacity-50"
+            className="h-11 w-full rounded bg-primary px-6 text-base font-semibold text-primary-foreground shadow-lg shadow-blue-500/20 disabled:opacity-50 md:w-auto md:min-w-[200px]"
           >
-            {saving ? "Saving..." : "Save Campaign"}
+            {saving ? "Launching…" : "Launch Campaign"}
           </button>
         </div>
       </div>
       )}
 
-      <div className="space-y-4 md:col-span-2">
+      <div className="space-y-4 lg:col-span-7">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-xl font-bold">{showArchivedCampaigns ? "All Surveys" : "Active Surveys"}</h2>
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1048,7 +1071,7 @@ function CampaignsTab({
           <Link
             key={c.id}
             href={`/campaigns/${c.id}`}
-            className="flex justify-between rounded-lg border border-accent bg-muted p-4 transition hover:bg-muted/80"
+            className="flex justify-between rounded-lg border border-white/10 bg-slate-900/50 p-4 transition hover:bg-white/5"
           >
             <div>
               <span className="font-bold">{c.name}</span>
