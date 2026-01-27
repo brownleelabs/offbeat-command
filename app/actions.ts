@@ -118,6 +118,14 @@ export async function resetDemo(
 // Types moved to lib/actions-constants.ts
 
 export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
+  // LOG: Confirm function is being called
+  console.log('[submitClaim] 🚀 Function invoked:', {
+    tokenId: input.tokenId?.slice(0, 8) + '...',
+    campaignId: input.campaignId?.slice(0, 8) + '...' ?? 'null',
+    studentEmail: input.studentEmail,
+    timestamp: new Date().toISOString(),
+  })
+
   // ENVIRONMENT CHECK: Fail fast with explicit error if Service Role Key is missing
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
