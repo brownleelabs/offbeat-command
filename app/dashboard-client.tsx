@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Box } from "lucide-react";
+import { Box, ArrowUp, ArrowDown } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
 
@@ -482,6 +482,7 @@ export default function AdminDashboard() {
       </nav>
 
       <main className="p-0">
+        <SystemStatus />
         <ExecutiveStats
           viewMode={viewMode}
           tokens={tokens}
@@ -573,6 +574,147 @@ const MOCK_USD_PER_ACTIVE_TOKEN = 100;
 /** Mock 4.5% APY for Yield Earned (TENANT). */
 const TENANT_APY = 0.045;
 
+/** Economic Operating Zone definitions from economic_engine.md */
+export type EconomicZone = {
+  id: 1 | 2 | 3 | 4;
+  name: "Normal" | "Steady" | "Efficient" | "Freeze";
+  rateRange: string;
+  description: string;
+  operatorFee: string;
+  color: "emerald" | "amber" | "orange" | "red";
+  pulse: boolean; // true = animate-pulse, false = solid
+};
+
+/**
+ * Determines the Economic Operating Zone based on current yield rate.
+ * Source: economic_engine.md - Economic Operating Zones (System Status)
+ * 
+ * @param yield - Current yield rate as a percentage (e.g., 4.2 for 4.2%)
+ * @returns EconomicZone object with zone details
+ */
+export function getEconomicZone(yield: number): EconomicZone {
+  if (yield > 2.0) {
+    return {
+      id: 1,
+      name: "Normal",
+      rateRange: "> 2.0%",
+      description: "Full Capacity. Operator fee paid at 12%. Surplus flows to growth.",
+      operatorFee: "12%",
+      color: "emerald",
+      pulse: true,
+    };
+  } else if (yield >= 1.5 && yield <= 2.0) {
+    return {
+      id: 2,
+      name: "Steady",
+      rateRange: "1.5% - 2.0%",
+      description: "Fee Sacrifice. Operator fee reduced to subsidize payouts. Goal: Maintain 100% student welfare.",
+      operatorFee: "Reduced",
+      color: "amber",
+      pulse: true,
+    };
+  } else if (yield >= 0.1 && yield < 1.5) {
+    return {
+      id: 3,
+      name: "Efficient",
+      rateRange: "0.1% - 1.5%",
+      description: "Welfare Throttling. Operator fee waived (0%). Reinvestment paused. 100% yield to students. Token issuance throttled.",
+      operatorFee: "0% (Waived)",
+      color: "orange",
+      pulse: true,
+    };
+  } else {
+    // yield < 0.1% (includes 0.0%)
+    return {
+      id: 4,
+      name: "Freeze",
+      rateRange: "0.0%",
+      description: "Hard Stop. Token issuance halts. Principal is never liquidated.",
+      operatorFee: "N/A",
+      color: "red",
+      pulse: false, // Solid red, no pulse
+    };
+  }
+}
+
+/** Mock current yield rate (4.2% = Zone 1 Normal). Replace with real API hook later. */
+const MOCK_CURRENT_YIELD = 4.2;
+
+function SystemStatus() {
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  // TODO: Replace with real API hook when Franklin Benji integration is ready
+  const currentYield = MOCK_CURRENT_YIELD;
+  const zone = getEconomicZone(currentYield);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const timeString = currentTime.toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  // Color mapping based on zone
+  const dotColorClasses = {
+    emerald: "bg-emerald-500",
+    amber: "bg-amber-500",
+    orange: "bg-orange-500",
+    red: "bg-red-500",
+  };
+
+  const textColorClasses = {
+    emerald: "text-emerald-500/80",
+    amber: "text-amber-500/80",
+    orange: "text-orange-500/80",
+    red: "text-red-500/80",
+  };
+
+  const dotColor = dotColorClasses[zone.color];
+  const textColor = textColorClasses[zone.color];
+  const pulseClass = zone.pulse ? "animate-pulse" : "";
+
+  return (
+    <div className="flex items-center justify-between border-b border-white/5 bg-slate-900/40 px-6 py-2 backdrop-blur-sm">
+      <div className="relative">
+        <div
+          className="flex items-center gap-2 text-xs font-mono cursor-help"
+          onMouseEnter={() => setShowTooltip(true)}
+          onMouseLeave={() => setShowTooltip(false)}
+        >
+          <div className={`h-2 w-2 rounded-full ${dotColor} ${pulseClass}`} />
+          <span className={textColor}>
+            System: {zone.name}
+          </span>
+        </div>
+        {showTooltip && (
+          <div className="absolute left-0 top-6 z-50 w-80 rounded-lg border border-white/10 bg-slate-900 p-3 text-xs shadow-xl backdrop-blur-sm">
+            <div className="font-mono font-semibold text-white">
+              Zone {zone.id}: {zone.name}
+            </div>
+            <div className="mt-1 text-slate-400">
+              <div>Rate Range: {zone.rateRange}</div>
+              <div className="mt-1">{zone.description}</div>
+              <div className="mt-1 font-mono">Operator Fee: {zone.operatorFee}</div>
+              <div className="mt-1 text-slate-500">Current Yield: {currentYield.toFixed(1)}%</div>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="text-xs font-mono text-slate-500">
+        Updated: {timeString}
+      </div>
+    </div>
+  );
+}
+
 function ExecutiveStats({
   viewMode,
   tokens,
@@ -587,58 +729,174 @@ function ExecutiveStats({
     activeCount * MOCK_USD_PER_ACTIVE_TOKEN;
   const yieldEarned = Math.round(campusLiquidity * TENANT_APY);
 
+  // Mock trend data (until backend is ready)
+  const globalAumTrend = { value: 2.4, positive: true };
+  const treasuryYieldTrend = { value: 12.1, positive: true };
+  const activeCampusesTrend = { value: 0, positive: true };
+
   if (viewMode === "GLOBAL") {
     return (
-      <div className="grid grid-cols-1 gap-4 border-b border-white/10 bg-background/95 px-12 py-6 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 border-b border-white/5 bg-slate-900/40 px-6 py-6 backdrop-blur-sm md:grid-cols-3">
+        {/* Global AUM Card */}
         <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
-          <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          <h3 className="mb-2 text-xs font-sans font-medium uppercase tracking-widest text-muted-foreground">
             Global AUM
           </h3>
-          <p className="font-mono text-xl font-bold text-foreground">$1.2M</p>
+          <p className="font-mono text-2xl font-bold text-white">$1.2M</p>
+          <div className="mt-1 flex items-center gap-2">
+            {globalAumTrend.positive ? (
+              <ArrowUp className="h-3 w-3 text-emerald-400" />
+            ) : (
+              <ArrowDown className="h-3 w-3 text-red-400" />
+            )}
+            <span
+              className={`text-xs font-mono ${
+                globalAumTrend.positive ? "text-emerald-400" : "text-red-400"
+              }`}
+            >
+              {globalAumTrend.positive ? "+" : ""}
+              {globalAumTrend.value}%
+            </span>
+            <span className="text-xs text-slate-500">vs last month</span>
+          </div>
         </div>
+
+        {/* Net Treasury Yield Card */}
         <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
-          <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          <h3 className="mb-2 text-xs font-sans font-medium uppercase tracking-widest text-muted-foreground">
             Net Treasury Yield
           </h3>
-          <p className="font-mono text-xl font-bold tabular-nums text-success">
+          <p className="font-mono text-2xl font-bold tabular-nums text-white">
             +$4,250
           </p>
+          <div className="mt-1 flex items-center gap-2">
+            {treasuryYieldTrend.positive ? (
+              <ArrowUp className="h-3 w-3 text-emerald-400" />
+            ) : (
+              <ArrowDown className="h-3 w-3 text-red-400" />
+            )}
+            <span
+              className={`text-xs font-mono ${
+                treasuryYieldTrend.positive ? "text-emerald-400" : "text-red-400"
+              }`}
+            >
+              {treasuryYieldTrend.positive ? "+" : ""}
+              {treasuryYieldTrend.value}%
+            </span>
+            <span className="text-xs text-slate-500">vs last month</span>
+          </div>
         </div>
+
+        {/* Active Campuses Card */}
         <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
-          <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          <h3 className="mb-2 text-xs font-sans font-medium uppercase tracking-widest text-muted-foreground">
             Active Campuses
           </h3>
-          <p className="font-mono text-xl font-bold text-primary">12</p>
+          <p className="font-mono text-2xl font-bold text-white">12</p>
+          <div className="mt-1 flex items-center gap-2">
+            {activeCampusesTrend.positive ? (
+              <ArrowUp className="h-3 w-3 text-emerald-400" />
+            ) : (
+              <ArrowDown className="h-3 w-3 text-red-400" />
+            )}
+            <span
+              className={`text-xs font-mono ${
+                activeCampusesTrend.positive ? "text-emerald-400" : "text-red-400"
+              }`}
+            >
+              {activeCampusesTrend.positive ? "+" : ""}
+              {activeCampusesTrend.value}
+            </span>
+            <span className="text-xs text-slate-500">Stable</span>
+          </div>
         </div>
       </div>
     );
   }
 
+  // TENANT view - mock trends for tenant metrics
+  const campusLiquidityTrend = { value: 5.2, positive: true };
+  const yieldEarnedTrend = { value: 8.3, positive: true };
+  const activeFleetTrend = { value: 3, positive: true };
+
   return (
-    <div className="grid grid-cols-1 gap-4 border-b border-white/10 bg-background/95 px-12 py-6 md:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 border-b border-white/5 bg-slate-900/40 px-6 py-6 backdrop-blur-sm md:grid-cols-3">
+      {/* Campus Liquidity Card */}
       <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
-        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <h3 className="mb-2 text-xs font-sans font-medium uppercase tracking-widest text-muted-foreground">
           Campus Liquidity
         </h3>
-        <p className="font-mono text-xl font-bold text-foreground">
+        <p className="font-mono text-2xl font-bold text-white">
           ${campusLiquidity.toLocaleString("en-US")}
         </p>
+        <div className="mt-1 flex items-center gap-2">
+          {campusLiquidityTrend.positive ? (
+            <ArrowUp className="h-3 w-3 text-emerald-400" />
+          ) : (
+            <ArrowDown className="h-3 w-3 text-red-400" />
+          )}
+          <span
+            className={`text-xs font-mono ${
+              campusLiquidityTrend.positive ? "text-emerald-400" : "text-red-400"
+            }`}
+          >
+            {campusLiquidityTrend.positive ? "+" : ""}
+            {campusLiquidityTrend.value}%
+          </span>
+          <span className="text-xs text-slate-500">vs last 30 days</span>
+        </div>
       </div>
+
+      {/* Yield Earned Card */}
       <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
-        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <h3 className="mb-2 text-xs font-sans font-medium uppercase tracking-widest text-muted-foreground">
           Yield Earned
         </h3>
-        <p className="font-mono text-xl font-bold tabular-nums text-success">
-          +${yieldEarned.toLocaleString("en-US")} (4.5% APY)
+        <p className="font-mono text-2xl font-bold tabular-nums text-white">
+          +${yieldEarned.toLocaleString("en-US")}
         </p>
+        <div className="mt-1 flex items-center gap-2">
+          {yieldEarnedTrend.positive ? (
+            <ArrowUp className="h-3 w-3 text-emerald-400" />
+          ) : (
+            <ArrowDown className="h-3 w-3 text-red-400" />
+          )}
+          <span
+            className={`text-xs font-mono ${
+              yieldEarnedTrend.positive ? "text-emerald-400" : "text-red-400"
+            }`}
+          >
+            {yieldEarnedTrend.positive ? "+" : ""}
+            {yieldEarnedTrend.value}%
+          </span>
+          <span className="text-xs text-slate-500">(4.5% APY) vs last 30 days</span>
+        </div>
       </div>
+
+      {/* Active Fleet Card */}
       <div className="rounded-xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-sm">
-        <h3 className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <h3 className="mb-2 text-xs font-sans font-medium uppercase tracking-widest text-muted-foreground">
           Active Fleet
         </h3>
-        <p className="font-mono text-xl font-bold text-primary">
+        <p className="font-mono text-2xl font-bold text-white">
           {activeCount}
         </p>
+        <div className="mt-1 flex items-center gap-2">
+          {activeFleetTrend.positive ? (
+            <ArrowUp className="h-3 w-3 text-emerald-400" />
+          ) : (
+            <ArrowDown className="h-3 w-3 text-red-400" />
+          )}
+          <span
+            className={`text-xs font-mono ${
+              activeFleetTrend.positive ? "text-emerald-400" : "text-red-400"
+            }`}
+          >
+            {activeFleetTrend.positive ? "+" : ""}
+            {activeFleetTrend.value}
+          </span>
+          <span className="text-xs text-slate-500">vs last 30 days</span>
+        </div>
       </div>
     </div>
   );
@@ -697,7 +955,7 @@ function FleetTab({
   const canAssignToSchool = isSuperAdmin || (userRole === "ORG_ADMIN" && !!profile?.organization_id);
 
   return (
-    <div className="mx-auto max-w-7xl p-12 font-sans">
+    <div className="mx-auto max-w-[98vw] px-4 py-8 font-sans">
       {/* Control Bar — 8px rhythm, island strategy */}
       <div className="mb-6 flex h-20 w-full flex-shrink-0 items-center justify-between border-b border-white/10 bg-gradient-to-r from-slate-900 to-slate-950">
         <h2 className="text-2xl font-bold">Fleet Management</h2>
@@ -935,67 +1193,64 @@ function CampaignsTab({
   const requiredCount = CAMPAIGN_REQUIRED_FIELDS.length;
 
   return (
-    <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 p-12 font-sans lg:grid-cols-12">
+    <div className="mx-auto grid max-w-[98vw] grid-cols-1 gap-8 px-4 py-8 font-sans lg:grid-cols-2">
       {campaignsWrite && (
-      <div className="flex flex-col lg:col-span-5">
+      <div className="flex flex-col p-4">
         <h2 className="mb-6 text-xl font-bold">Create Campaign</h2>
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
-          {/* Left column — Logistics (Terms) */}
-          <div className="rounded-xl border border-border bg-card p-6 lg:col-span-5">
-            <fieldset className="space-y-6">
-              <legend className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Logistics
-              </legend>
-              {userRole === "SUPER_ADMIN" && orgId === null && (
-                <div className="space-y-2">
-                  <label className="block text-sm text-muted-foreground">Organization</label>
-                  <select
-                    value={createOrgId}
-                    onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
-                    className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
-                  >
-                    <option value="">Select organization...</option>
-                    {organizations.map((o) => (
-                      <option key={o.id} value={o.id}>{o.name}</option>
-                    ))}
-                  </select>
-                  {organizations.length === 0 && (
-                    <p className="text-xs text-amber-500">
-                      No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
-                    </p>
-                  )}
-                </div>
-              )}
+          {/* Left column — Logistics */}
+          <fieldset className="space-y-6 lg:col-span-5">
+            <legend className="px-0 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Logistics
+            </legend>
+            {userRole === "SUPER_ADMIN" && orgId === null && (
               <div className="space-y-2">
-                <label className="block text-sm text-muted-foreground">Campaign name</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Austin Q1 Survey"
+                <label className="block text-sm text-muted-foreground">Organization</label>
+                <select
+                  value={createOrgId}
+                  onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
                   className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              {/* Required fields — Digital Receipt style */}
-              <div className="rounded-r-md border-l-2 border-emerald-500 bg-emerald-950/30 p-4 font-mono text-xs text-emerald-400">
-                <h3 className="mb-2 font-semibold uppercase tracking-wider">
-                  Required fields (reward payout)
-                </h3>
-                <ul className="space-y-1.5">
-                  {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
-                    <li key={f.key} className="flex items-center gap-2">
-                      <span className="text-emerald-400">✓</span>
-                      {f.label}
-                    </li>
+                >
+                  <option value="">Select organization...</option>
+                  {organizations.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
                   ))}
-                </ul>
-                <p className="mt-2 text-muted-foreground">
-                  Collected for every response; used for payouts.
-                </p>
+                </select>
+                {organizations.length === 0 && (
+                  <p className="text-xs text-amber-500">
+                    No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
+                  </p>
+                )}
               </div>
-            </fieldset>
-          </div>
-          {/* Right column — Questions (Content) */}
+            )}
+            <div className="space-y-2">
+              <label className="block text-sm text-muted-foreground">Campaign name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Austin Q1 Survey"
+                className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <div className="rounded-r-md border-l-2 border-emerald-500 bg-emerald-950/30 p-4 font-mono text-xs text-emerald-400">
+              <h3 className="mb-2 font-semibold uppercase tracking-wider">
+                Required fields (reward payout)
+              </h3>
+              <ul className="space-y-1.5">
+                {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
+                  <li key={f.key} className="flex items-center gap-2">
+                    <span className="text-emerald-400">✓</span>
+                    {f.label}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-muted-foreground">
+                Collected for every response; used for payouts.
+              </p>
+            </div>
+          </fieldset>
+          {/* Right column — Additional questions */}
           <div className="space-y-4 lg:col-span-7">
             <div className="flex items-center justify-between">
               <label className="text-sm text-muted-foreground">
@@ -1051,7 +1306,7 @@ function CampaignsTab({
       </div>
       )}
 
-      <div className="space-y-4 lg:col-span-7">
+      <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-xl font-bold">{showArchivedCampaigns ? "All Surveys" : "Active Surveys"}</h2>
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1132,7 +1387,7 @@ function SettingsTab({
   };
 
   return (
-    <div className="mx-auto max-w-4xl p-8">
+    <div className="mx-auto max-w-[98vw] px-4 py-8">
       <h2 className="mb-2 text-2xl font-bold">Role permissions</h2>
       <p className="mb-8 text-sm text-muted-foreground">
         Turn on or off write access for each profile. All org profiles can see fleet, campaigns, and map data; these toggles control who can change things. SUPER_ADMIN always has full access.
