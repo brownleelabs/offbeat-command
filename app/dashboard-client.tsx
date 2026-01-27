@@ -697,15 +697,17 @@ function FleetTab({
 
   return (
     <div className="mx-auto max-w-7xl p-8">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold">Fleet Management</h2>
-        <div className="flex flex-wrap gap-4">
+      <div className="mb-6 flex flex-shrink-0 flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <h2 className="text-2xl font-bold">Fleet Management</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-6">
           {showFleetWrite && (
-            <>
+            <div className="flex items-center gap-3 border-r border-accent pr-6">
               <select
                 value={targetCampaignId}
                 onChange={(e) => setTargetCampaignId(e.target.value)}
-                className="rounded border border-accent bg-muted p-2 text-sm"
+                className="w-64 min-w-[16rem] rounded border border-accent bg-muted px-3 py-2 text-sm"
               >
                 <option value="">Select Campaign to Assign...</option>
                 <option value="__unassign__">Clear Campaign (Unassigned)</option>
@@ -720,18 +722,18 @@ function FleetTab({
                 disabled={!targetCampaignId || selectedTokenIds.size === 0}
                 className="rounded bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-50"
               >
-                BULK ASSIGN
+                Set Campaign
               </button>
-            </>
+            </div>
           )}
           {canAssignToSchool && (
-            <>
+            <div className="flex items-center gap-3 border-r border-accent pr-6">
               {isSuperAdmin && (
                 <>
                   <select
                     value={targetSchoolId}
                     onChange={(e) => setTargetSchoolId(e.target.value)}
-                    className="rounded border border-accent bg-muted p-2 text-sm"
+                    className="w-64 min-w-[16rem] rounded border border-accent bg-muted px-3 py-2 text-sm"
                     title="Assign selected tokens to an organization"
                   >
                     <option value="">Select organization...</option>
@@ -751,18 +753,20 @@ function FleetTab({
               <button
                 onClick={onAssignToSchool}
                 disabled={!targetSchoolId || selectedTokenIds.size === 0}
-                className="rounded border-2 border-primary bg-primary/10 px-4 py-2 text-sm font-bold text-primary hover:bg-primary/20 disabled:opacity-50"
+                className="rounded border-2 border-amber-600 bg-amber-600/10 px-4 py-2 text-sm font-bold text-amber-700 hover:bg-amber-600/20 disabled:opacity-50 dark:border-amber-500 dark:text-amber-400 dark:hover:bg-amber-500/20"
               >
-                {isSuperAdmin ? "ASSIGN TO ORGANIZATION" : "ASSIGN TO MY ORGANIZATION"}
+                Transfer Fleet
               </button>
-            </>
+            </div>
           )}
-          <button
-            onClick={onRefresh}
-            className="rounded border border-accent px-4 py-2 text-sm"
-          >
-            Refresh
-          </button>
+          <div className="flex items-center">
+            <button
+              onClick={onRefresh}
+              className="rounded border border-accent px-4 py-2 text-sm hover:bg-muted/50"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
 
@@ -923,96 +927,100 @@ function CampaignsTab({
   return (
     <div className="mx-auto grid max-w-7xl grid-cols-1 gap-8 p-8 md:grid-cols-3">
       {campaignsWrite && (
-      <div className="h-fit rounded-xl border border-accent bg-muted p-6">
+      <div className="flex flex-col rounded-xl border border-accent bg-muted p-6 md:col-span-1">
         <h2 className="mb-4 text-xl font-bold">Create Campaign</h2>
-        <div className="space-y-4">
-          {/* SUPER_ADMIN in Global must choose org */}
-          {userRole === "SUPER_ADMIN" && orgId === null && (
-            <>
-              <label className="block text-sm text-muted-foreground">Organization</label>
-              <select
-                value={createOrgId}
-                onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
-                className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
-              >
-                <option value="">Select organization...</option>
-                {organizations.map((o) => (
-                  <option key={o.id} value={o.id}>{o.name}</option>
-                ))}
-              </select>
-              {organizations.length === 0 && (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                  No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
-                </p>
-              )}
-            </>
-          )}
-          {/* Required fields – fixed for reward payout */}
-          <div className="rounded-lg border border-success/30 bg-background/95 p-3">
-            <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-success">
-              Required fields (reward payout)
-            </h3>
-            <ul className="space-y-1.5 text-sm text-accent">
-              {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
-                <li key={f.key} className="flex items-center gap-2">
-                  <span className="text-success">✓</span>
-                  {f.label}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-[10px] text-muted-foreground">
-              Collected for every response; used for payouts.
-            </p>
-          </div>
-
-          <label className="block text-sm text-muted-foreground">Campaign name</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Austin Q1 Survey"
-            className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
-          />
-
-          <div className="flex items-center justify-between">
-            <label className="text-sm text-muted-foreground">
-              Additional questions (up to {MAX_QUESTIONS})
-            </label>
-            {questions.length < MAX_QUESTIONS && (
-              <button
-                type="button"
-                onClick={addQuestion}
-                className="text-xs text-primary hover:underline"
-              >
-                + Add
-              </button>
+        <div className="grid flex-1 grid-cols-1 gap-8 md:grid-cols-2 md:gap-8">
+          <div className="space-y-4">
+            {/* Column 1: Details – Organization, Name, Required fields */}
+            {userRole === "SUPER_ADMIN" && orgId === null && (
+              <>
+                <label className="block text-sm text-muted-foreground">Organization</label>
+                <select
+                  value={createOrgId}
+                  onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
+                  className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">Select organization...</option>
+                  {organizations.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                </select>
+                {organizations.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                    No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
+                  </p>
+                )}
+              </>
             )}
+            <div className="rounded-lg border border-success/30 bg-background/95 p-3">
+              <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-success">
+                Required fields (reward payout)
+              </h3>
+              <ul className="space-y-1.5 text-sm text-accent">
+                {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
+                  <li key={f.key} className="flex items-center gap-2">
+                    <span className="text-success">✓</span>
+                    {f.label}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[10px] text-muted-foreground">
+                Collected for every response; used for payouts.
+              </p>
+            </div>
+            <label className="block text-sm text-muted-foreground">Campaign name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Austin Q1 Survey"
+              className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
+            />
           </div>
-          {questions.map((q, i) => (
-            <div key={i} className="flex gap-2">
-              <input
-                type="text"
-                value={q}
-                onChange={(e) => setQuestion(i, e.target.value)}
-                placeholder={`Question ${i + 1}`}
-                className="flex-1 rounded border border-accent bg-background px-3 py-2 text-sm"
-              />
-              {questions.length > 1 && (
+          <div className="space-y-4">
+            {/* Column 2: Config – Additional questions */}
+            <div className="flex items-center justify-between">
+              <label className="text-sm text-muted-foreground">
+                Additional questions (up to {MAX_QUESTIONS})
+              </label>
+              {questions.length < MAX_QUESTIONS && (
                 <button
                   type="button"
-                  onClick={() => removeQuestion(i)}
-                  className="text-destructive hover:underline"
+                  onClick={addQuestion}
+                  className="text-xs text-primary hover:underline"
                 >
-                  ×
+                  + Add
                 </button>
               )}
             </div>
-          ))}
-          {createError && <p className="text-sm text-destructive">{createError}</p>}
+            {questions.map((q, i) => (
+              <div key={i} className="flex gap-2">
+                <input
+                  type="text"
+                  value={q}
+                  onChange={(e) => setQuestion(i, e.target.value)}
+                  placeholder={`Question ${i + 1}`}
+                  className="flex-1 rounded border border-accent bg-background px-3 py-2 text-sm"
+                />
+                {questions.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeQuestion(i)}
+                    className="text-destructive hover:underline"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        {createError && <p className="mt-4 text-sm text-destructive">{createError}</p>}
+        <div className="mt-6 border-t border-accent pt-6">
           <button
             onClick={createCampaign}
             disabled={saving || !name.trim() || (orgId === null && !createOrgId)}
-            className="w-full rounded bg-primary py-2 font-bold text-primary-foreground disabled:opacity-50"
+            className="w-full rounded bg-primary py-2.5 font-bold text-primary-foreground disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save Campaign"}
           </button>
