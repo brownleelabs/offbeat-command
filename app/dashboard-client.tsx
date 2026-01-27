@@ -589,11 +589,11 @@ export type EconomicZone = {
  * Determines the Economic Operating Zone based on current yield rate.
  * Source: economic_engine.md - Economic Operating Zones (System Status)
  * 
- * @param yield - Current yield rate as a percentage (e.g., 4.2 for 4.2%)
+ * @param yieldRate - Current yield rate as a percentage (e.g., 4.2 for 4.2%)
  * @returns EconomicZone object with zone details
  */
-export function getEconomicZone(yield: number): EconomicZone {
-  if (yield > 2.0) {
+export function getEconomicZone(yieldRate: number): EconomicZone {
+  if (yieldRate > 2.0) {
     return {
       id: 1,
       name: "Normal",
@@ -603,7 +603,7 @@ export function getEconomicZone(yield: number): EconomicZone {
       color: "emerald",
       pulse: true,
     };
-  } else if (yield >= 1.5 && yield <= 2.0) {
+  } else if (yieldRate >= 1.5 && yieldRate <= 2.0) {
     return {
       id: 2,
       name: "Steady",
@@ -613,7 +613,7 @@ export function getEconomicZone(yield: number): EconomicZone {
       color: "amber",
       pulse: true,
     };
-  } else if (yield >= 0.1 && yield < 1.5) {
+  } else if (yieldRate >= 0.1 && yieldRate < 1.5) {
     return {
       id: 3,
       name: "Efficient",
@@ -624,7 +624,7 @@ export function getEconomicZone(yield: number): EconomicZone {
       pulse: true,
     };
   } else {
-    // yield < 0.1% (includes 0.0%)
+    // yieldRate < 0.1% (includes 0.0%)
     return {
       id: 4,
       name: "Freeze",
