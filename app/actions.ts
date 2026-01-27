@@ -1,8 +1,15 @@
 'use server'
 
-import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
+import {
+  CONTROLLABLE_ROLES,
+  ROLE_PERMISSION_KEYS,
+  type BulkAssignToSchoolResult,
+  type RolePermissionKey,
+  type RolePermissionRow,
+  type SubmitClaimInput,
+} from '@/lib/actions-constants'
 
 /** Server client with no user – RLS may block writes. Prefer createServerSupabase() for authenticated flows. */
 function getSupabaseAnon() {
@@ -12,14 +19,12 @@ function getSupabaseAnon() {
   return createClient(url, key)
 }
 
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-
 /** Service-role client (bypasses RLS). Use only for trusted server-only flows (e.g. anonymous claim). */
 function getSupabaseService() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = SERVICE_ROLE_KEY
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!url || !key) {
-    console.error('[claim] SUPABASE_SERVICE_ROLE_KEY is not set. Add it to .env.local and restart the dev server.')
+    console.error('[claim] SUPABASE_SERVICE_ROLE_KEY is missing. Add it to .env.local and restart.')
     throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY for claim flow")
   }
   return createClient(url, key)
@@ -27,7 +32,7 @@ function getSupabaseService() {
 
 /** Call before claim flows – returns false if service role key is missing (so we can log clearly). */
 function hasServiceRoleKey(): boolean {
-  return !!SERVICE_ROLE_KEY
+  return !!process.env.SUPABASE_SERVICE_ROLE_KEY
 }
 
 export async function claimToken(id: string) {
@@ -60,21 +65,6 @@ export async function resetDemo(orgId?: string | null) {
     console.error('resetDemo:', error)
     throw new Error(error?.message ?? 'Reset failed')
   }
-}
-
-export type SubmitClaimInput = {
-  tokenId: string
-  campaignId: string | null
-  firstName: string
-  lastName: string
-  studentId: string
-  studentEmail: string
-  venmoUsername: string
-  customAnswers: { order: number; text: string; answer: string }[]
-  lat?: number | null
-  lng?: number | null
-  /** All other data available from the tap (client + optional server merge). Stored in responses.claim_metadata. */
-  claimMetadata?: Record<string, unknown> | null
 }
 
 const UUID_REGEX = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
@@ -142,11 +132,8 @@ export async function getTokenForClaim(tokenId: string) {
   }
 }
 
-/** Result type for submitClaim – never throws, returns this instead. */
-export type SubmitClaimResult = { success: true } | { success: false; error: string }
-
 /** Submit claim form (anonymous). Uses service role. Never throws – returns result with success/error. */
-export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
+export async function submitClaim(input: SubmitClaimInput) {
   if (!hasServiceRoleKey()) {
     console.error('[claim] submitClaim: SUPABASE_SERVICE_ROLE_KEY is missing. Add it to .env.local and restart.')
     return { success: false, error: 'Something went wrong. Please try again later.' }
@@ -176,28 +163,9 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
 
     const orgId = (token as { organization_id?: string | null }).organization_id ?? null
 
-    // Merge server-available request data with client tap context (no new permissions)
-    const serverHeaders: Record<string, string> = {}
-    try {
-      const h = await headers()
-      const copy = (name: string) => {
-        const v = h.get(name)
-        if (v) serverHeaders[name.replace(/-/g, '_').toLowerCase()] = v
-      }
-      copy('user-agent')
-      copy('accept-language')
-      copy('referer')
-      copy('sec-ch-ua')
-      copy('sec-ch-ua-mobile')
-      copy('sec-ch-ua-platform')
-      copy('x-forwarded-for')
-      copy('x-real-ip')
-    } catch {
-      // ignore if headers() not available
-    }
+    // Merge client tap context; skip headers() in this action to avoid Server Components digest errors.
     const claim_metadata: Record<string, unknown> = {
       ...(typeof clientMetadata === 'object' && clientMetadata !== null ? clientMetadata : {}),
-      _server: serverHeaders,
       _submitted_at: new Date().toISOString(),
     }
 
@@ -244,8 +212,6 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
   }
 }
 
-/** Result for bulkAssignTokensToSchool – never throws. */
-export type BulkAssignToSchoolResult = { success: true; count: number } | { success: false; error: string }
 
 /** SUPER_ADMIN only: bulk assign selected tokens to a school (organization). Uses service role after role check. */
 export async function bulkAssignTokensToSchool(
@@ -295,15 +261,6 @@ export async function bulkAssignTokensToSchool(
     return { success: false, error: err instanceof Error ? err.message : 'Assignment failed.' }
   }
 }
-
-/** Permission keys controllable by SUPER_ADMIN. */
-export const ROLE_PERMISSION_KEYS = ['fleet_write', 'campaigns_write', 'map_reset'] as const
-export type RolePermissionKey = (typeof ROLE_PERMISSION_KEYS)[number]
-
-/** Roles that can have permissions toggled (SUPER_ADMIN is always full access in code). */
-export const CONTROLLABLE_ROLES = ['ORG_ADMIN', 'AUDITOR'] as const
-
-export type RolePermissionRow = { role: string; permission_key: string; enabled: boolean }
 
 /** Fetch current role_permissions for UI. Authenticated users can read. */
 export async function getRolePermissions(): Promise<RolePermissionRow[]> {

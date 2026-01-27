@@ -9,25 +9,28 @@ import { createClient } from "@/lib/supabase";
 import { useDashboard } from "@/components/dashboard-context";
 import { resetDemo } from "@/app/actions";
 
-// STARTING VIEW: UT Austin
 const INITIAL_VIEW_STATE = {
   longitude: -97.7341,
   latitude: 30.2849,
   zoom: 15,
 };
 
+/** Single built-in style; avoids custom/composite layer issues. */
+const MAP_STYLE = "mapbox://styles/mapbox/light-v11";
+
 interface MapViewProps {
-  /** When true, hide admin-only controls (e.g. Reset). Used for public student map. */
   readOnly?: boolean;
-  /** When set, fetch tokens for this org instead of using dashboard context. Used for public /schools/[slug]. */
   orgId?: string | null;
-  /** Mapbox access token (passed from parent so dynamic import has it). Falls back to NEXT_PUBLIC_MAPBOX_TOKEN. */
   mapboxToken?: string | null;
-  /** When false, hide Reset button (e.g. when role has no map_reset permission). Default true. */
   canReset?: boolean;
 }
 
-export default function MapView({ readOnly = false, orgId: orgIdOverride, mapboxToken: mapboxTokenProp, canReset = true }: MapViewProps = {}) {
+export default function MapView({
+  readOnly = false,
+  orgId: orgIdOverride,
+  mapboxToken: mapboxTokenProp,
+  canReset = true,
+}: MapViewProps = {}) {
   const dashboard = useDashboard();
   const orgId = orgIdOverride != null ? orgIdOverride : dashboard.orgId;
 
@@ -35,7 +38,27 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
   const [logs, setLogs] = useState<string[]>([]);
   const [isReseting, setIsReseting] = useState(false);
   const [containerReady, setContainerReady] = useState(false);
+  const [tokenFromApi, setTokenFromApi] = useState<string>("");
   const mapContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const fromPropOrEnv =
+      mapboxTokenProp ??
+      (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_MAPBOX_TOKEN : "") ??
+      "";
+    if (fromPropOrEnv) return;
+    let cancelled = false;
+    fetch("/api/mapbox-token")
+      .then((r) => r.json())
+      .then((data: { token?: string }) => {
+        if (!cancelled && data?.token) setTokenFromApi(data.token);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mapboxTokenProp]);
+
   useEffect(() => {
     const el = mapContainerRef.current;
     if (!el) return;
@@ -50,8 +73,6 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
   }, []);
 
   const supabase = createClient();
-
-  // Map access: no per-org blocking; every org sees the map. Restriction is which tokens are shown (filter by school/org).
   const fetchTokens = useCallback(async () => {
     const client = createClient();
     let query = client.from("tokens").select("*");
@@ -62,12 +83,10 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
     if (data) setTokens(data as Token[]);
   }, [orgId]);
 
-  // 1. Fetch Initial Data (org-aware)
   useEffect(() => {
     fetchTokens();
   }, [fetchTokens]);
 
-  // 2. Realtime: tokens (status/position) + responses (new claims for Live Feed)
   useEffect(() => {
     const channel = supabase
       .channel("map-live")
@@ -110,7 +129,6 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
         }
       )
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
@@ -127,27 +145,36 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
     }
   };
 
-  const mapboxToken = mapboxTokenProp ?? process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
+  const mapboxToken =
+    mapboxTokenProp ??
+    (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_MAPBOX_TOKEN : undefined) ??
+    tokenFromApi ??
+    "";
   const canShowMap = !!mapboxToken && containerReady;
 
   return (
     <div className="relative w-full flex-1 min-h-[400px] bg-background" style={{ height: "100%", minHeight: 400 }}>
-      {/* Map is available to all orgs; tokens are filtered by school/org (dashboard orgId). */}
-      <div ref={mapContainerRef} className="absolute inset-0 w-full" style={{ minHeight: 400, height: "100%" }}>
+      <div
+        ref={mapContainerRef}
+        className="absolute inset-0 w-full bg-zinc-200"
+        style={{ minHeight: 480, height: "100%" }}
+      >
         {canShowMap ? (
           <Map
+            key={mapboxToken.slice(0, 10)}
             initialViewState={INITIAL_VIEW_STATE}
             mapboxAccessToken={mapboxToken}
-            mapStyle="mapbox://styles/mapbox/dark-v11"
-            style={{ width: "100%", height: "100%", minHeight: 400 }}
-            attributionControl={false}
+            mapStyle={MAP_STYLE}
+            style={{ width: "100%", height: "100%", minHeight: 480 }}
+            attributionControl={true}
+            onLoad={(e) => e.target.resize()}
           >
             {tokens.map((t) => (
               <Marker key={t.id} longitude={t.lng} latitude={t.lat}>
                 <div
                   className={`p-2 rounded-full transition-all duration-500 ${
                     t.status === "active"
-                      ? "bg-primary animate-pulse shadow-[0_0_15px_var(--primary)]"
+                      ? "bg-primary animate-pulse shadow-[0_0_15px var(--primary)]"
                       : "bg-muted opacity-50"
                   }`}
                 >
@@ -163,16 +190,13 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
         ) : (
           <div className="flex h-full min-h-[400px] w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-8 text-center">
             <p className="text-muted-foreground">
-              Map unavailable: set <code className="rounded bg-muted px-1">NEXT_PUBLIC_MAPBOX_TOKEN</code> in{" "}
-              <code className="rounded bg-muted px-1">.env.local</code> and restart the dev server.
+              Map needs a token: set <code className="rounded bg-muted px-1">NEXT_PUBLIC_MAPBOX_TOKEN</code> in{" "}
+              <code className="rounded bg-muted px-1">.env.local</code> and restart dev server.
             </p>
           </div>
         )}
       </div>
 
-      {/* --- UI OVERLAYS --- */}
-      
-      {/* 1. TOP LEFT: Stats Panel */}
       <div className="absolute top-4 left-4 z-50 flex flex-col gap-4 w-80">
         <div className="bg-background/95 backdrop-blur-md border border-accent p-4 rounded-xl shadow-2xl">
           <h2 className="text-muted-foreground text-xs font-bold tracking-widest uppercase mb-2">
@@ -181,7 +205,7 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
           <div className="flex justify-between items-end">
             <div>
               <div className="text-3xl font-mono text-foreground font-bold">
-                ${(tokens.filter(t => t.status === 'found').length * 25).toFixed(2)}
+                ${(tokens.filter((t) => t.status === "found").length * 25).toFixed(2)}
               </div>
               <div className="text-success text-xs mt-1">Total Yield Disbursed</div>
             </div>
@@ -194,14 +218,15 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
           </div>
         </div>
 
-        {/* 2. LIVE FEED */}
         <div className="bg-background/95 backdrop-blur-md border border-accent p-4 rounded-xl shadow-2xl max-h-40 overflow-hidden">
           <div className="flex items-center gap-2 text-primary text-xs font-bold tracking-widest uppercase mb-2">
             <Activity className="w-3 h-3 text-primary" />
             Live Feed
           </div>
           <div className="flex flex-col gap-1">
-            {logs.length === 0 && <span className="text-muted-foreground text-xs italic">Waiting for signal...</span>}
+            {logs.length === 0 && (
+              <span className="text-muted-foreground text-xs italic">Waiting for signal...</span>
+            )}
             {logs.slice(0, 3).map((log, i) => (
               <div key={i} className="text-success text-xs font-mono animate-in slide-in-from-left fade-in">
                 {log}
@@ -211,13 +236,12 @@ export default function MapView({ readOnly = false, orgId: orgIdOverride, mapbox
         </div>
       </div>
 
-      {/* 3. BOTTOM RIGHT: The Reset Button (hidden in readOnly or when canReset is false) */}
       {!readOnly && canReset && (
         <div className="absolute bottom-8 right-8 z-50">
           <button
             onClick={handleReset}
             disabled={isReseting}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-full font-bold hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-[0_0_20px_var(--primary)]"
+            className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-full font-bold hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-[0_0_20px var(--primary)]"
           >
             <RefreshCw className={`w-4 h-4 ${isReseting ? "animate-spin" : ""}`} />
             {isReseting ? "Reloading Grid..." : "Reset Simulation"}

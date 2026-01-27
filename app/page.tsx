@@ -9,12 +9,14 @@ import { useDashboard, type ViewMode } from "@/components/dashboard-context";
 
 const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
 import {
-  bulkAssignTokensToSchool,
-  getRolePermissions,
-  setRolePermission,
   ROLE_PERMISSION_KEYS,
   CONTROLLABLE_ROLES,
   type RolePermissionRow,
+} from "@/lib/actions-constants";
+import {
+  bulkAssignTokensToSchool,
+  getRolePermissions,
+  setRolePermission,
 } from "@/app/actions";
 import type { Campaign, TokenWithCampaign } from "@/types";
 import type { CampaignQuestion } from "@/types";
@@ -443,6 +445,7 @@ export default function AdminDashboard() {
           tokens={tokens}
           responsesCount={responsesCount}
         />
+        {/* Map access is not RBAC; only which tokens are shown is (MapView filters by orgId). canReset is the only permission on the map (Reset button). */}
         {activeTab === "map" && (
           <div className="flex w-full flex-1 flex-col min-h-[480px]" style={{ height: "calc(100vh - 72px - 8rem)" }}>
             <MapView mapboxToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN} canReset={effectivePermissions.mapReset} />

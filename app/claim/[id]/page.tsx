@@ -118,7 +118,12 @@ export default async function ClaimPage({
     );
   }
 
-  const result = await getTokenForClaim(idStr);
+  let result: { token: Token; campaign: Campaign | null } | null = null;
+  try {
+    result = await getTokenForClaim(idStr);
+  } catch (e) {
+    console.error("[Claim] getTokenForClaim threw:", e);
+  }
 
   // 2. Token not found (or DB error)
   if (!result) {
@@ -144,10 +149,16 @@ export default async function ClaimPage({
     );
   }
 
+  // Pass plain serializable props to avoid RSC digest errors (Supabase rows can have non-plain values)
+  const campaignPlain =
+    campaign === null
+      ? null
+      : (JSON.parse(JSON.stringify(campaign)) as Campaign);
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-black p-4">
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 backdrop-blur-xl">
-        <ClaimForm tokenId={token.id} campaign={campaign} />
+        <ClaimForm tokenId={token.id} campaign={campaignPlain} />
       </div>
     </main>
   );
