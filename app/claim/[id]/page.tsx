@@ -45,7 +45,7 @@ function getSupabaseAdmin() {
 async function getTokenForClaim(
   id: string
 ): Promise<{ token: Token; campaign: Campaign | null } | null> {
-  // 1. FAIL FAST: If it's not a UUID, return null immediately.
+  // 1. FAIL FAST: Validates strictly. If not UUID, return null (prevents 500 DB error).
   if (!isValidUUID(id)) {
      console.warn(`⚠️ [Claim] Invalid UUID format: ${id}`);
      return null;
@@ -57,7 +57,7 @@ async function getTokenForClaim(
     return null;
   }
 
-  // 2. CRASH PROTECTION: Wrap the DB call in try/catch
+  // 2. SAFETY NET: Wraps DB call in try/catch to stop server crashes.
   try {
     const { data: token, error } = await supabaseAdmin
       .from("tokens")
@@ -83,7 +83,6 @@ async function getTokenForClaim(
       organization_id: token.organization_id ?? null,
     };
 
-    // Fetch campaign safely
     let campaign: Campaign | null = null;
     if (token.campaign_id) {
       const { data: camp } = await supabaseAdmin
@@ -115,11 +114,7 @@ export default async function ClaimPage({
     return <ErrorScreen title="INVALID LINK" msg="No token ID provided." />;
   }
 
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return <ErrorScreen title="CONFIG ERROR" msg="Missing Service Role Key." />;
-  }
-
-  // Now this call is SAFE and won't throw 500
+  // Pass STRICT normalized ID to safe function
   const result = await getTokenForClaim(normalizedId);
 
   if (!result) {

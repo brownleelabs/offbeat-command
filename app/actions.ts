@@ -4,7 +4,7 @@ import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
 
-// 1. STRICT VALIDATION & HELPERS
+// --- 1. STRICT VALIDATION & HELPERS ---
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function isValidUUID(id: string): boolean {
@@ -40,7 +40,7 @@ function hasServiceRoleKey(): boolean {
   return !!SERVICE_ROLE_KEY
 }
 
-// 2. CORE ACTIONS
+// --- 2. CORE ACTIONS (CLAIM & RESET) ---
 
 export async function claimToken(id: string) {
   const supabase = getSupabaseAnon()
@@ -85,7 +85,6 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
     const supabase = getSupabaseService()
     const tokenId = normalizeClaimTokenId(input.tokenId)
 
-    // FAIL FAST VALIDATION
     if (!tokenId || !isValidUUID(tokenId)) {
       return { success: false, error: 'Invalid Token ID format.' }
     }
@@ -154,6 +153,7 @@ export async function getTokenForClaim(tokenId: string) {
   try {
     const supabase = getSupabaseService()
     const id = normalizeClaimTokenId(tokenId)
+    // FAIL FAST: If strict ID check fails, return null immediately
     if (!id || !isValidUUID(id)) return null
 
     const { data: token } = await supabase.from('tokens').select('id, campaign_id').eq('id', id).maybeSingle()
@@ -172,7 +172,7 @@ export async function getTokenForClaim(tokenId: string) {
   }
 }
 
-// 3. ADMIN FUNCTIONS (RESTORED)
+// --- 3. ADMIN FUNCTIONS (RESTORED TO FIX BUILD ERROR) ---
 
 export type BulkAssignToSchoolResult = { success: true; count: number } | { success: false; error: string }
 
