@@ -3,6 +3,17 @@
 import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
+import {
+  type BulkAssignToSchoolResult,
+  type SubmitClaimInput,
+  type SubmitClaimResult,
+} from '@/lib/actions-constants'
+import {
+  CONTROLLABLE_ROLES,
+  ROLE_PERMISSION_KEYS,
+  type RolePermissionKey,
+  type RolePermissionRow,
+} from '@/lib/constants'
 
 // --- 1. STRICT VALIDATION & HELPERS ---
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -62,21 +73,7 @@ export async function resetDemo(orgId?: string | null) {
   if (error) throw new Error(error?.message ?? 'Reset failed')
 }
 
-export type SubmitClaimInput = {
-  tokenId: string
-  campaignId: string | null
-  firstName: string
-  lastName: string
-  studentId: string
-  studentEmail: string
-  venmoUsername: string
-  customAnswers: { order: number; text: string; answer: string }[]
-  lat?: number | null
-  lng?: number | null
-  claimMetadata?: Record<string, unknown> | null
-}
-
-export type SubmitClaimResult = { success: true } | { success: false; error: string }
+// Types moved to lib/actions-constants.ts
 
 export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
   if (!hasServiceRoleKey()) return { success: false, error: 'Server configuration error.' }
@@ -172,9 +169,7 @@ export async function getTokenForClaim(tokenId: string) {
   }
 }
 
-// --- 3. ADMIN FUNCTIONS (RESTORED TO FIX BUILD ERROR) ---
-
-export type BulkAssignToSchoolResult = { success: true; count: number } | { success: false; error: string }
+// --- 3. ADMIN FUNCTIONS ---
 
 export async function bulkAssignTokensToSchool(
   tokenIds: string[],
@@ -221,10 +216,7 @@ export async function bulkAssignTokensToSchool(
   }
 }
 
-export const ROLE_PERMISSION_KEYS = ['fleet_write', 'campaigns_write', 'map_reset'] as const
-export type RolePermissionKey = (typeof ROLE_PERMISSION_KEYS)[number]
-export const CONTROLLABLE_ROLES = ['ORG_ADMIN', 'AUDITOR'] as const
-export type RolePermissionRow = { role: string; permission_key: string; enabled: boolean }
+// Constants and types moved to lib/actions-constants.ts
 
 export async function getRolePermissions(): Promise<RolePermissionRow[]> {
   try {

@@ -13,7 +13,7 @@ import {
   ROLE_PERMISSION_KEYS,
   CONTROLLABLE_ROLES,
   type RolePermissionRow,
-} from "@/lib/actions-constants";
+} from "@/lib/constants";
 import {
   bulkAssignTokensToSchool,
   getRolePermissions,
