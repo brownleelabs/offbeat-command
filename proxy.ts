@@ -43,18 +43,37 @@ export async function proxy(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  try {
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
 
-  // 1. If user is missing and NOT on the login page, kick them to login
-  if (!user && request.nextUrl.pathname !== "/login") {
-    return NextResponse.redirect(new URL("/login", request.url));
-  }
+    // If auth check fails, allow request to proceed (let RLS handle access control)
+    if (authError) {
+      console.warn('[proxy] Auth check failed:', authError.message);
+      // If not on login page and auth fails, redirect to login
+      if (request.nextUrl.pathname !== "/login") {
+        return NextResponse.redirect(new URL("/login", request.url));
+      }
+      return response;
+    }
 
-  // 2. If user is logged in and ON the login page, kick them to dashboard
-  if (user && request.nextUrl.pathname === "/login") {
-    return NextResponse.redirect(new URL("/", request.url));
+    // 1. If user is missing and NOT on the login page, kick them to login
+    if (!user && request.nextUrl.pathname !== "/login") {
+      return NextResponse.redirect(new URL("/login", request.url));
+    }
+
+    // 2. If user is logged in and ON the login page, kick them to dashboard
+    if (user && request.nextUrl.pathname === "/login") {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
+  } catch (err) {
+    console.error('[proxy] Unexpected error during auth check:', err);
+    // On error, redirect to login for safety
+    if (request.nextUrl.pathname !== "/login") {
+      return NextResponse.redirect(new URL("/login", request.url));
+    }
   }
 
   return response;

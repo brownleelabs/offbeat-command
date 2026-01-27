@@ -11,11 +11,14 @@ import {
   type SubmitClaimInput,
 } from '@/lib/actions-constants'
 
-/** Server client with no user – RLS may block writes. Prefer createServerSupabase() for authenticated flows. */
+/** Server client with no user – RLS may block writes. Prefer createServerSupabase() for authenticated flows. Returns null if env vars missing. */
 function getSupabaseAnon() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !key) throw new Error("Missing Supabase API Keys on Server")
+  if (!url || !key) {
+    console.error('[getSupabaseAnon] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY')
+    return null
+  }
   return createClient(url, key)
 }
 
@@ -35,35 +38,55 @@ function hasServiceRoleKey(): boolean {
   return !!process.env.SUPABASE_SERVICE_ROLE_KEY
 }
 
-export async function claimToken(id: string) {
-  const supabase = getSupabaseAnon()
-  const { data, error } = await supabase
-    .from('tokens')
-    .update({ status: 'found' })
-    .eq('id', id)
-    .select()
-  if (error) {
-    console.error("ClaimToken Error:", error)
-    throw new Error(error.message)
+/** Claim a token (authenticated). Never throws – returns result with success/error. */
+export async function claimToken(id: string): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabase = getSupabaseAnon()
+    if (!supabase) {
+      return { success: false, error: 'Server configuration error.' }
+    }
+    const { data, error } = await supabase
+      .from('tokens')
+      .update({ status: 'found' })
+      .eq('id', id)
+      .select()
+    if (error) {
+      console.error("ClaimToken Error:", error)
+      return { success: false, error: error.message || 'Failed to claim token.' }
+    }
+    if (!data?.length) {
+      return { success: false, error: 'Token ID not found in database' }
+    }
+    return { success: true }
+  } catch (err) {
+    console.error('claimToken error:', err)
+    const msg = err instanceof Error ? err.message : 'Claim failed.'
+    // Don't expose internal errors about missing env vars
+    const safe = msg.includes('Missing Supabase') ? 'Server configuration error.' : msg
+    return { success: false, error: safe }
   }
-  if (!data?.length) throw new Error("Token ID not found in database")
-  return { success: true }
 }
 
-/** Reset tokens to active. Uses authenticated server client so RLS allows update for your org. */
-export async function resetDemo(orgId?: string | null) {
-  const supabase = await createServerSupabase()
-  let query = supabase
-    .from('tokens')
-    .update({ status: 'active' })
-    .neq('status', 'active')
-  if (orgId != null) {
-    query = query.eq('organization_id', orgId)
-  }
-  const { error } = await query
-  if (error) {
-    console.error('resetDemo:', error)
-    throw new Error(error?.message ?? 'Reset failed')
+/** Reset tokens to active. Uses authenticated server client so RLS allows update for your org. Never throws – returns result with success/error. */
+export async function resetDemo(orgId?: string | null): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabase = await createServerSupabase()
+    let query = supabase
+      .from('tokens')
+      .update({ status: 'active' })
+      .neq('status', 'active')
+    if (orgId != null) {
+      query = query.eq('organization_id', orgId)
+    }
+    const { error } = await query
+    if (error) {
+      console.error('resetDemo:', error)
+      return { success: false, error: error?.message ?? 'Reset failed' }
+    }
+    return { success: true }
+  } catch (err) {
+    console.error('resetDemo error:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Reset failed.' }
   }
 }
 
@@ -304,14 +327,19 @@ export async function bulkAssignTokensToSchool(
     const { data: { user } } = await supabaseAuth.auth.getUser()
     if (!user) return { success: false, error: 'Not authenticated.' }
 
-    const { data: profile } = await supabaseAuth
+    const { data: profile, error: profileError } = await supabaseAuth
       .from('profiles')
       .select('role, organization_id')
       .eq('id', user.id)
       .single()
 
-    const role = (profile as { role?: string; organization_id?: string | null } | null)?.role
-    const profileOrgId = (profile as { organization_id?: string | null } | null)?.organization_id ?? null
+    if (profileError || !profile) {
+      console.error('bulkAssignTokensToSchool profile fetch:', profileError)
+      return { success: false, error: 'User profile not found.' }
+    }
+
+    const role = (profile as { role?: string; organization_id?: string | null }).role
+    const profileOrgId = (profile as { organization_id?: string | null }).organization_id ?? null
 
     let effectiveOrgId: string
     if (role === 'SUPER_ADMIN') {
@@ -378,13 +406,18 @@ export async function setRolePermission(
     const { data: { user } } = await supabaseAuth.auth.getUser()
     if (!user) return { success: false, error: 'Not authenticated.' }
 
-    const { data: profile } = await supabaseAuth
+    const { data: profile, error: profileError } = await supabaseAuth
       .from('profiles')
       .select('role')
       .eq('id', user.id)
       .single()
 
-    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+    if (profileError || !profile) {
+      console.error('setRolePermission profile fetch:', profileError)
+      return { success: false, error: 'User profile not found.' }
+    }
+
+    if ((profile as { role?: string }).role !== 'SUPER_ADMIN') {
       return { success: false, error: 'Only SUPER_ADMIN can change role permissions.' }
     }
 
