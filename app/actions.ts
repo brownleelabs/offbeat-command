@@ -3,19 +3,10 @@
 import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
-import {
-  type BulkAssignToSchoolResult,
-  type SubmitClaimInput,
-  type SubmitClaimResult,
-} from '@/lib/actions-constants'
-import {
-  CONTROLLABLE_ROLES,
-  ROLE_PERMISSION_KEYS,
-  type RolePermissionKey,
-  type RolePermissionRow,
-} from '@/lib/constants'
+// Import the constants from the new file
+import { ROLE_PERMISSION_KEYS, CONTROLLABLE_ROLES, type RolePermissionKey, type RolePermissionRow } from '@/lib/constants'
 
-// --- 1. STRICT VALIDATION & HELPERS ---
+// 1. STRICT VALIDATION & HELPERS
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function isValidUUID(id: string): boolean {
@@ -51,7 +42,7 @@ function hasServiceRoleKey(): boolean {
   return !!SERVICE_ROLE_KEY
 }
 
-// --- 2. CORE ACTIONS (CLAIM & RESET) ---
+// 2. CORE ACTIONS
 
 export async function claimToken(id: string) {
   const supabase = getSupabaseAnon()
@@ -73,7 +64,21 @@ export async function resetDemo(orgId?: string | null) {
   if (error) throw new Error(error?.message ?? 'Reset failed')
 }
 
-// Types moved to lib/actions-constants.ts
+export type SubmitClaimInput = {
+  tokenId: string
+  campaignId: string | null
+  firstName: string
+  lastName: string
+  studentId: string
+  studentEmail: string
+  venmoUsername: string
+  customAnswers: { order: number; text: string; answer: string }[]
+  lat?: number | null
+  lng?: number | null
+  claimMetadata?: Record<string, unknown> | null
+}
+
+export type SubmitClaimResult = { success: true } | { success: false; error: string }
 
 export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
   if (!hasServiceRoleKey()) return { success: false, error: 'Server configuration error.' }
@@ -150,7 +155,6 @@ export async function getTokenForClaim(tokenId: string) {
   try {
     const supabase = getSupabaseService()
     const id = normalizeClaimTokenId(tokenId)
-    // FAIL FAST: If strict ID check fails, return null immediately
     if (!id || !isValidUUID(id)) return null
 
     const { data: token } = await supabase.from('tokens').select('id, campaign_id').eq('id', id).maybeSingle()
@@ -169,7 +173,9 @@ export async function getTokenForClaim(tokenId: string) {
   }
 }
 
-// --- 3. ADMIN FUNCTIONS ---
+// 3. ADMIN FUNCTIONS
+
+export type BulkAssignToSchoolResult = { success: true; count: number } | { success: false; error: string }
 
 export async function bulkAssignTokensToSchool(
   tokenIds: string[],
@@ -215,8 +221,6 @@ export async function bulkAssignTokensToSchool(
     return { success: false, error: err instanceof Error ? err.message : 'Assignment failed.' }
   }
 }
-
-// Constants and types moved to lib/actions-constants.ts
 
 export async function getRolePermissions(): Promise<RolePermissionRow[]> {
   try {
