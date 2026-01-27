@@ -17,6 +17,8 @@ export default function SchoolMapPage() {
 
   useEffect(() => {
     if (!slug) return;
+    setLoading(true);
+    setNotFound(false);
     const supabase = createClient();
     (async () => {
       const { data, error } = await supabase

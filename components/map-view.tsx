@@ -174,7 +174,7 @@ export default function MapView({
                 <div
                   className={`p-2 rounded-full transition-all duration-500 ${
                     t.status === "active"
-                      ? "bg-primary animate-pulse shadow-[0_0_15px var(--primary)]"
+                      ? "bg-primary animate-pulse shadow-[0_0_15px_var(--primary)]"
                       : "bg-muted opacity-50"
                   }`}
                 >
@@ -241,7 +241,7 @@ export default function MapView({
           <button
             onClick={handleReset}
             disabled={isReseting}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-full font-bold hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-[0_0_20px var(--primary)]"
+            className="flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded-full font-bold hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-[0_0_20px_var(--primary)]"
           >
             <RefreshCw className={`w-4 h-4 ${isReseting ? "animate-spin" : ""}`} />
             {isReseting ? "Reloading Grid..." : "Reset Simulation"}
