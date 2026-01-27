@@ -1,6 +1,7 @@
 'use server'
 
-import { headers } from 'next/headers'
+import { cookies, headers } from 'next/headers'
+import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
 import {
@@ -128,9 +129,14 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
 
   // ENVIRONMENT CHECK: Fail fast with explicit error if env vars are missing
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   if (!supabaseUrl) {
     console.error('[submitClaim] ❌ MISSING NEXT_PUBLIC_SUPABASE_URL in production environment')
     return { success: false, error: 'Server Error: Missing Supabase URL' }
+  }
+  if (!supabaseAnonKey) {
+    console.error('[submitClaim] ❌ MISSING NEXT_PUBLIC_SUPABASE_ANON_KEY in production environment')
+    return { success: false, error: 'Server Error: Missing Supabase Anon Key' }
   }
 
   try {
@@ -141,12 +147,24 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       return { success: false, error: 'Invalid Token ID format.' }
     }
     
-    // USE COOKIE-BASED CLIENT: Inject cookies from next/headers
-    const supabase = await createServerSupabase()
-    if (!supabase) {
-      console.error('[submitClaim] ❌ createServerSupabase() returned null')
-      return { success: false, error: 'Server Error: Failed to initialize Supabase client' }
-    }
+    // USE COOKIE-BASED CLIENT (Server Action): inject cookies explicitly
+    const cookieStore = await cookies()
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options ?? {})
+            )
+          } catch {
+            // setAll can be ignored in Server Actions when only reading session
+          }
+        },
+      },
+    })
 
     // VERIFY USER: Check authentication before executing logic
     const { data: { user }, error: authError } = await supabase.auth.getUser()
