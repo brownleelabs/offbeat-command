@@ -1,7 +1,6 @@
 'use server'
 
-import { cookies, headers } from 'next/headers'
-import { createServerClient } from '@supabase/ssr'
+import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
 import {
@@ -49,12 +48,9 @@ function getSupabaseAnon() {
   }
   return createClient(url, key)
 }
-
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-
 function getSupabaseService() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = SERVICE_ROLE_KEY
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!url || !key) {
     console.error('[getSupabaseService] Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
     return null
@@ -63,7 +59,7 @@ function getSupabaseService() {
 }
 
 function hasServiceRoleKey(): boolean {
-  return !!SERVICE_ROLE_KEY
+  return !!process.env.SUPABASE_SERVICE_ROLE_KEY
 }
 
 // 2. CORE ACTIONS
@@ -127,18 +123,6 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
     timestamp: new Date().toISOString(),
   })
 
-  // ENVIRONMENT CHECK: Fail fast with explicit error if env vars are missing
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!supabaseUrl) {
-    console.error('[submitClaim] ❌ MISSING NEXT_PUBLIC_SUPABASE_URL in production environment')
-    return { success: false, error: 'Server Error: Missing Supabase URL' }
-  }
-  if (!supabaseAnonKey) {
-    console.error('[submitClaim] ❌ MISSING NEXT_PUBLIC_SUPABASE_ANON_KEY in production environment')
-    return { success: false, error: 'Server Error: Missing Supabase Anon Key' }
-  }
-
   try {
     const tokenId = normalizeClaimTokenId(input.tokenId)
     // SAFETY: Fail fast before ANY Supabase call
@@ -146,71 +130,24 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       console.error('[submitClaim] Invalid token ID format:', { tokenId, raw: input.tokenId })
       return { success: false, error: 'Invalid Token ID format.' }
     }
-    
-    // USE COOKIE-BASED CLIENT (Server Action): inject cookies explicitly
-    const cookieStore = await cookies()
-    const cookieNames = cookieStore
-      .getAll()
-      .map((c) => c.name)
-      .slice(0, 50)
-    const supabaseCookieNames = cookieNames.filter(
-      (n) => n.includes('sb-') || n.includes('supabase')
-    )
-    if (supabaseCookieNames.length === 0) {
-      console.warn('[submitClaim] ⚠️ No Supabase auth cookies on request', {
-        totalCookies: cookieNames.length,
-        cookieNames,
-      })
-    } else {
-      console.log('[submitClaim] 🍪 Supabase auth cookies present', {
-        supabaseCookieCount: supabaseCookieNames.length,
-        supabaseCookieNames,
-      })
-    }
 
-    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options ?? {})
-            )
-          } catch {
-            // setAll can be ignored in Server Actions when only reading session
-          }
-        },
-      },
-    })
-
-    // VERIFY USER: Check authentication before executing logic
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError) {
-      console.error('[submitClaim] ❌ Auth check failed:', {
-        message: authError.message,
-        name: authError.name,
-        status: authError.status,
-      })
-      return { success: false, error: 'Unauthorized: Authentication required' }
+    // Use SERVICE ROLE client so claims can be submitted without auth
+    if (!hasServiceRoleKey()) {
+      console.error('[submitClaim] ❌ Missing SUPABASE_SERVICE_ROLE_KEY')
+      return { success: false, error: 'Server Error: Missing Service Role Key' }
     }
-    if (!user) {
-      console.error('[submitClaim] ❌ No user session found')
-      return { success: false, error: 'Unauthorized: Please log in to submit a claim' }
+    const supabase = getSupabaseService()
+    if (!supabase) {
+      return { success: false, error: 'Server configuration error.' }
     }
-
-    console.log('[submitClaim] ✅ User authenticated:', {
-      userId: user.id.slice(0, 8) + '...',
-      email: user.email,
-    })
 
     const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
 
     try {
+      // Fetch token with org + campaign to enforce business rules
       const { data: token, error: tokenErr } = await supabase
         .from('tokens')
-        .select('id, organization_id')
+        .select('id, organization_id, campaign_id, status')
         .eq('id', tokenId)
         .maybeSingle()
 
@@ -224,7 +161,49 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         })
         return { success: false, error: 'Token lookup failed.' }
       }
-      if (!token) return { success: false, error: 'Token not found.' }
+      if (!token) {
+        return { success: false, error: 'Token not found.' }
+      }
+
+      // Block double-claims
+      if ((token as { status?: string }).status === 'found') {
+        return { success: false, error: 'This token has already been claimed.' }
+      }
+
+      // Enforce that token must be assigned to a campaign
+      const tokenCampaignId = (token as { campaign_id?: string | null }).campaign_id ?? null
+      if (!tokenCampaignId) {
+        return { success: false, error: 'This asset is not currently active.' }
+      }
+
+      // Enforce that provided campaign matches token's campaign
+      if (!campaignId || campaignId !== tokenCampaignId) {
+        return { success: false, error: 'Invalid campaign for this token.' }
+      }
+
+      // Validate campaign is not archived
+      const { data: campaign, error: campErr } = await supabase
+        .from('campaigns')
+        .select('id, deleted_at')
+        .eq('id', tokenCampaignId)
+        .maybeSingle()
+
+      if (campErr) {
+        console.error('[submitClaim] ❌ Campaign lookup error:', {
+          message: campErr.message,
+          details: campErr.details,
+          hint: campErr.hint,
+          code: campErr.code,
+          campaignId: tokenCampaignId,
+        })
+        return { success: false, error: 'Campaign lookup failed.' }
+      }
+      if (!campaign) {
+        return { success: false, error: 'Campaign not found.' }
+      }
+      if ((campaign as { deleted_at?: string | null }).deleted_at) {
+        return { success: false, error: 'This campaign has ended.' }
+      }
 
       const orgId = (token as { organization_id?: string | null }).organization_id ?? null
 
@@ -244,12 +223,11 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         ...(typeof clientMetadata === 'object' ? clientMetadata : {}),
         _server: serverHeaders,
         _submitted_at: new Date().toISOString(),
-        _submitted_by_user_id: user.id, // Track which user submitted the claim
       }
 
       const { error: insertErr } = await supabase.from('responses').insert({
         token_id: tokenId,
-        campaign_id: campaignId ?? null,
+        campaign_id: tokenCampaignId,
         organization_id: orgId,
         first_name: firstName.trim(),
         last_name: lastName.trim(),
