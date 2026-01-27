@@ -32,8 +32,10 @@ export default function MapView({
   canReset = true,
 }: MapViewProps = {}) {
   const dashboard = useDashboard();
-  // Use override (e.g. /schools/[slug]) or data scope (AUDITOR = all, others = one org)
-  const orgId = orgIdOverride ?? dashboard.dataScopeOrgId ?? dashboard.orgId;
+  // Use override only when explicitly passed (e.g. /schools/[slug]). Otherwise use dataScopeOrgId
+  // and preserve null (AUDITOR / SUPER_ADMIN GLOBAL = see all); do not fall back to orgId.
+  const orgId =
+    orgIdOverride != null ? orgIdOverride : dashboard.dataScopeOrgId;
 
   const [tokens, setTokens] = useState<Token[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
