@@ -4,7 +4,7 @@ import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
 
-// STRICT REGEX
+// 1. STRICT VALIDATION & HELPERS
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function isValidUUID(id: string): boolean {
@@ -39,6 +39,8 @@ function getSupabaseService() {
 function hasServiceRoleKey(): boolean {
   return !!SERVICE_ROLE_KEY
 }
+
+// 2. CORE ACTIONS
 
 export async function claimToken(id: string) {
   const supabase = getSupabaseAnon()
@@ -100,8 +102,21 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
 
     const orgId = (token as { organization_id?: string | null }).organization_id ?? null
 
+    const serverHeaders: Record<string, string> = {}
+    try {
+      const h = await headers()
+      const copy = (name: string) => {
+        const v = h.get(name)
+        if (v) serverHeaders[name.replace(/-/g, '_').toLowerCase()] = v
+      }
+      copy('user-agent')
+      copy('x-forwarded-for')
+      copy('x-real-ip')
+    } catch {}
+
     const claim_metadata: Record<string, unknown> = {
       ...(typeof clientMetadata === 'object' ? clientMetadata : {}),
+      _server: serverHeaders,
       _submitted_at: new Date().toISOString(),
     }
 
@@ -134,32 +149,132 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
   }
 }
 
-// ... getTokenForClaim (safe version) and other exports below ...
-// Ensure you keep other exports like bulkAssignTokensToSchool, etc.
-// Just paste this strict validation logic at the top!
 export async function getTokenForClaim(tokenId: string) {
   if (!hasServiceRoleKey()) return null
   try {
     const supabase = getSupabaseService()
     const id = normalizeClaimTokenId(tokenId)
-    if (!id || !isValidUUID(id)) return null // Strict check here too
+    if (!id || !isValidUUID(id)) return null
 
     const { data: token } = await supabase.from('tokens').select('id, campaign_id').eq('id', id).maybeSingle()
     if (!token) return null
 
-    // ... rest of logic
-    return { token: { id: token.id, campaign_id: token.campaign_id }, campaign: null }
+    const campaignId = token.campaign_id
+    let campaign: unknown = null
+    if (campaignId) {
+      const { data: camp } = await supabase.from('campaigns').select('*').eq('id', campaignId).single()
+      campaign = camp
+    }
+
+    return { token: { id: token.id, campaign_id: campaignId }, campaign }
   } catch {
     return null
   }
 }
 
+// 3. ADMIN FUNCTIONS (RESTORED)
+
 export type BulkAssignToSchoolResult = { success: true; count: number } | { success: false; error: string }
 
-export async function bulkAssignTokensToSchool(tokenIds: string[], organizationId: string): Promise<BulkAssignToSchoolResult> {
-    // Placeholder to keep valid TS, ensure your original logic remains
-    return { success: false, error: "Implemented in full file" }
+export async function bulkAssignTokensToSchool(
+  tokenIds: string[],
+  organizationId: string
+): Promise<BulkAssignToSchoolResult> {
+  if (!tokenIds?.length || !organizationId?.trim()) {
+    return { success: false, error: 'Select at least one token and a school.' }
+  }
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated.' }
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    const role = (profile as { role?: string } | null)?.role
+    if (role !== 'SUPER_ADMIN') {
+      return { success: false, error: 'Only SUPER_ADMIN can assign tokens to schools.' }
+    }
+
+    if (!hasServiceRoleKey()) {
+      return { success: false, error: 'Server configuration error.' }
+    }
+
+    const supabase = getSupabaseService()
+    const ids = tokenIds.filter((id) => typeof id === 'string' && id.length > 0)
+    if (ids.length === 0) return { success: false, error: 'No valid token IDs.' }
+
+    const { error } = await supabase
+      .from('tokens')
+      .update({ organization_id: organizationId.trim() })
+      .in('id', ids)
+
+    if (error) {
+      return { success: false, error: error.message ?? 'Update failed.' }
+    }
+    return { success: true, count: ids.length }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Assignment failed.' }
+  }
 }
 
-export async function getRolePermissions() { return [] }
-export async function setRolePermission() { return { success: false } }
+export const ROLE_PERMISSION_KEYS = ['fleet_write', 'campaigns_write', 'map_reset'] as const
+export type RolePermissionKey = (typeof ROLE_PERMISSION_KEYS)[number]
+export const CONTROLLABLE_ROLES = ['ORG_ADMIN', 'AUDITOR'] as const
+export type RolePermissionRow = { role: string; permission_key: string; enabled: boolean }
+
+export async function getRolePermissions(): Promise<RolePermissionRow[]> {
+  try {
+    const supabase = await createServerSupabase()
+    const { data, error } = await supabase
+      .from('role_permissions')
+      .select('role, permission_key, enabled')
+    if (error) return []
+    return (data ?? []) as RolePermissionRow[]
+  } catch {
+    return []
+  }
+}
+
+export async function setRolePermission(
+  role: string,
+  permissionKey: string,
+  enabled: boolean
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated.' }
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+      return { success: false, error: 'Only SUPER_ADMIN can change role permissions.' }
+    }
+
+    if (!CONTROLLABLE_ROLES.includes(role as never) || !ROLE_PERMISSION_KEYS.includes(permissionKey as RolePermissionKey)) {
+      return { success: false, error: 'Invalid role or permission key.' }
+    }
+
+    const supabase = getSupabaseService()
+    const { error } = await supabase
+      .from('role_permissions')
+      .upsert({ role, permission_key: permissionKey, enabled, updated_at: new Date().toISOString() }, {
+        onConflict: 'role,permission_key',
+      })
+
+    if (error) {
+      return { success: false, error: error.message ?? 'Update failed.' }
+    }
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Update failed.' }
+  }
+}
