@@ -229,7 +229,50 @@ export default function AdminDashboard() {
             const idx = prev.findIndex((t) => t.id === token.id);
             if (idx >= 0) {
               const out = [...prev];
-              out[idx] = { ...token, campaigns: prev[idx].campaigns ?? null, organizations: prev[idx].organizations ?? null };
+              const oldToken = prev[idx];
+              // If campaign_id changed, don't preserve old campaigns data (it's stale)
+              // Realtime updates don't include joined data, so token.campaigns will be null
+              const campaignIdChanged = oldToken.campaign_id !== token.campaign_id;
+              let campaigns: { name: string } | null = null;
+              if (campaignIdChanged) {
+                // Campaign ID changed - clear stale data immediately
+                // Realtime updates don't include joined data, so token.campaigns will be null
+                campaigns = null;
+                // Fetch new campaign data asynchronously (only if campaign_id is not null)
+                if (token.campaign_id) {
+                  supabase
+                    .from("campaigns")
+                    .select("name")
+                    .eq("id", token.campaign_id)
+                    .single()
+                    .then(({ data }) => {
+                      if (data) {
+                        setTokens((current) => {
+                          const currentIdx = current.findIndex((t) => t.id === token.id);
+                          // Verify campaign_id hasn't changed again before updating
+                          if (currentIdx >= 0 && current[currentIdx].campaign_id === token.campaign_id) {
+                            const updated = [...current];
+                            updated[currentIdx] = {
+                              ...updated[currentIdx],
+                              campaigns: { name: (data as { name: string }).name },
+                            };
+                            return updated;
+                          }
+                          return current;
+                        });
+                      }
+                    })
+                    .catch((err) => {
+                      console.warn("[Fleet] Failed to fetch campaign for updated token:", err);
+                    });
+                }
+                // If campaign_id is null (unassigned), campaigns stays null (correct)
+              } else {
+                // Campaign ID unchanged - preserve existing campaigns data if available
+                campaigns = token.campaigns ?? oldToken.campaigns ?? null;
+              }
+              // Preserve organizations (it doesn't change via campaign assignment)
+              out[idx] = { ...token, campaigns, organizations: oldToken.organizations ?? null };
               return out;
             }
             return [...prev, token];

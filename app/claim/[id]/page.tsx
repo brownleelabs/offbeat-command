@@ -46,28 +46,24 @@ function getSupabaseAdmin() {
 async function getTokenForClaim(
   id: string
 ): Promise<{ token: Token; campaign: Campaign | null } | null> {
-  const supabaseAdmin = getSupabaseAdmin();
+  // SAFETY 1: Validate ID format before touching DB
+  if (!isValidUUID(id)) {
+    console.warn(`⚠️ [Claim] Invalid UUID format: ${id}`);
+    return null;
+  }
 
+  const supabaseAdmin = getSupabaseAdmin();
   if (!supabaseAdmin) {
     console.error("❌ [Claim] Service Role Client failed to initialize.");
     return null;
   }
 
-  const normalizedId = normalizeClaimId(id);
-  
-  // Strict UUID validation - must match exactly before querying Supabase
-  if (!isValidUUID(normalizedId)) {
-    console.error(`❌ [Claim] Invalid UUID format: ${normalizedId}`);
-    return null;
-  }
-
-  console.log(`🔍 [Claim] Looking up token: ${normalizedId}`);
-
   try {
+    // SAFETY 2: Wrap DB call in try/catch to prevent 500s
     const { data: token, error } = await supabaseAdmin
       .from("tokens")
       .select("id, lat, lng, status, organization_id, campaign_id")
-      .eq("id", normalizedId)
+      .eq("id", id)
       .maybeSingle();
 
     if (error) {
@@ -76,45 +72,38 @@ async function getTokenForClaim(
     }
 
     if (!token) {
-      console.error("❌ [Claim] Token not found:", normalizedId);
+      console.warn("❌ [Claim] Token not found in DB:", id);
       return null;
     }
 
     const tokenData: Token = {
-      id: (token as { id: string }).id,
-      lat: Number((token as { lat: number }).lat) || 0,
-      lng: Number((token as { lng: number }).lng) || 0,
-      status: (token as { status: string }).status === "found" ? "found" : "active",
-      organization_id: (token as { organization_id?: string | null }).organization_id ?? null,
+      id: token.id,
+      lat: Number(token.lat) || 0,
+      lng: Number(token.lng) || 0,
+      status: token.status === "found" ? "found" : "active",
+      organization_id: token.organization_id ?? null,
     };
 
-    const campaignId = (token as { campaign_id?: string | null }).campaign_id ?? null;
+    const campaignId = token.campaign_id ?? null;
     let campaign: Campaign | null = null;
+
     if (campaignId) {
-      try {
-        const { data: camp, error: campError } = await supabaseAdmin
-          .from("campaigns")
-          .select("*")
-          .eq("id", campaignId)
-          .single();
-        
-        if (campError) {
-          console.error("❌ [Claim] Campaign fetch error:", campError.message);
-          // Continue without campaign - will show "not assigned" message
-        } else {
-          campaign = (camp as Campaign) ?? null;
-          // Treat archived campaigns as missing for claim flow (will show "This campaign has ended.")
-        }
-      } catch (err) {
-        console.error("❌ [Claim] Campaign fetch exception:", err);
-        // Continue without campaign
+      // Fetch campaign safely
+      const { data: camp, error: campError } = await supabaseAdmin
+        .from("campaigns")
+        .select("*")
+        .eq("id", campaignId)
+        .single();
+
+      if (!campError && camp) {
+        campaign = camp as Campaign;
       }
     }
 
     return { token: tokenData, campaign };
   } catch (err) {
-    console.error("❌ [Claim] getTokenForClaim exception:", err);
-    return null;
+    console.error("🔥 [Claim] CRITICAL DB EXCEPTION:", err);
+    return null; // Return null instead of crashing the page
   }
 }
 
@@ -125,9 +114,9 @@ export default async function ClaimPage({
 }) {
   const { id } = await params;
   const rawId = Array.isArray(id) ? id[0] : id ?? "";
-  const idStr = typeof rawId === "string" ? rawId : "";
+  const normalizedId = normalizeClaimId(rawId);
 
-  if (!idStr) {
+  if (!rawId) {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
         <h1 className="text-2xl font-bold text-red-500">INVALID LINK</h1>
@@ -149,12 +138,8 @@ export default async function ClaimPage({
     );
   }
 
-  let result: { token: Token; campaign: Campaign | null } | null = null;
-  try {
-    result = await getTokenForClaim(idStr);
-  } catch (e) {
-    console.error("[Claim] getTokenForClaim threw:", e);
-  }
+  // Pass normalized ID to the safe function
+  const result = await getTokenForClaim(normalizedId);
 
   // 2. Token not found (or DB error)
   if (!result) {
@@ -162,7 +147,7 @@ export default async function ClaimPage({
       <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
         <h1 className="mb-4 text-4xl font-bold text-red-500">TOKEN NOT FOUND</h1>
         <p className="max-w-md text-center text-zinc-400">
-          This token ID ({idStr.slice(0, 8)}...) does not exist or the link is invalid.
+          The token ID is invalid or could not be retrieved.
         </p>
       </div>
     );
@@ -170,7 +155,7 @@ export default async function ClaimPage({
 
   const { token, campaign } = result;
 
-  // 3. Already claimed
+  // 3. Already claimed check
   if (token.status === "found") {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">

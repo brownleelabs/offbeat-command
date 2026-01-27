@@ -176,14 +176,9 @@ export async function submitClaim(input: SubmitClaimInput) {
     const tokenId = normalizeClaimTokenId(input.tokenId)
     const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
 
-    if (!tokenId) {
-      return { success: false, error: 'Token ID is missing.' }
-    }
-
-    // Strict UUID validation - must match exactly before querying Supabase
-    if (!isValidUUID(tokenId)) {
-      console.error('[claim] submitClaim: Invalid UUID format:', tokenId)
-      return { success: false, error: 'Invalid token ID format.' }
+    // SAFETY: Fail fast if ID is bad
+    if (!tokenId || !isValidUUID(tokenId)) {
+      return { success: false, error: 'Invalid Token ID format.' }
     }
 
     // Validate campaignId if provided
@@ -194,7 +189,7 @@ export async function submitClaim(input: SubmitClaimInput) {
 
     const { data: token, error: tokenErr } = await supabase
       .from('tokens')
-      .select('id, organization_id, status')
+      .select('id, organization_id, status, campaign_id')
       .eq('id', tokenId)
       .maybeSingle()
 
@@ -209,6 +204,39 @@ export async function submitClaim(input: SubmitClaimInput) {
     // Check if token is already claimed
     if ((token as { status?: string }).status === 'found') {
       return { success: false, error: 'This token has already been claimed.' }
+    }
+
+    const tokenCampaignId = (token as { campaign_id?: string | null }).campaign_id ?? null
+
+    // SECURITY: Validate campaign exists, is not archived, and matches token's campaign_id
+    if (campaignId) {
+      // Verify campaignId matches token's campaign_id
+      if (campaignId !== tokenCampaignId) {
+        return { success: false, error: 'Campaign ID does not match the token assignment.' }
+      }
+
+      const { data: campaign, error: campaignErr } = await supabase
+        .from('campaigns')
+        .select('id, deleted_at')
+        .eq('id', campaignId)
+        .maybeSingle()
+
+      if (campaignErr) {
+        console.error('submitClaim campaign fetch:', campaignErr)
+        return { success: false, error: 'Campaign not found.' }
+      }
+
+      if (!campaign) {
+        return { success: false, error: 'Campaign not found.' }
+      }
+
+      // Block claims to archived campaigns
+      if ((campaign as { deleted_at?: string | null }).deleted_at) {
+        return { success: false, error: 'This campaign has ended. Submissions are no longer accepted.' }
+      }
+    } else if (tokenCampaignId) {
+      // If no campaignId provided but token has one, that's also invalid
+      return { success: false, error: 'This token requires a campaign ID.' }
     }
 
     const orgId = (token as { organization_id?: string | null }).organization_id ?? null
