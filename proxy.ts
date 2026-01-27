@@ -12,9 +12,22 @@ export async function proxy(request: NextRequest) {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) {
     console.error(
-      "[proxy] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Add them to .env.local and restart."
+      "[proxy] ❌ Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Add them to Vercel environment variables."
     );
     return response;
+  }
+
+  // Log cookie info for debugging (only in production to avoid spam)
+  const allCookies = request.cookies.getAll();
+  const supabaseCookies = allCookies.filter((c) =>
+    c.name.includes('supabase') || c.name.includes('sb-')
+  );
+  if (supabaseCookies.length === 0 && process.env.NODE_ENV === 'production') {
+    console.warn('[proxy] ⚠️ No Supabase auth cookies found in request:', {
+      pathname: request.nextUrl.pathname,
+      totalCookies: allCookies.length,
+      cookieNames: allCookies.map((c) => c.name),
+    });
   }
 
   const supabase = createServerClient(
@@ -49,9 +62,16 @@ export async function proxy(request: NextRequest) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    // If auth check fails, allow request to proceed (let RLS handle access control)
+    // If auth check fails, log detailed error info
     if (authError) {
-      console.warn('[proxy] Auth check failed:', authError.message);
+      console.warn('[proxy] ⚠️ Auth check failed:', {
+        message: authError.message,
+        name: authError.name,
+        status: authError.status,
+        pathname: request.nextUrl.pathname,
+        hasCookies: allCookies.length > 0,
+        supabaseCookieCount: supabaseCookies.length,
+      });
       // If not on login page and auth fails, redirect to login
       if (request.nextUrl.pathname !== "/login") {
         return NextResponse.redirect(new URL("/login", request.url));
@@ -69,7 +89,14 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL("/", request.url));
     }
   } catch (err) {
-    console.error('[proxy] Unexpected error during auth check:', err);
+    console.error('[proxy] ❌ Unexpected error during auth check:', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      name: err instanceof Error ? err.name : typeof err,
+      pathname: request.nextUrl.pathname,
+      hasUrl: !!url,
+      hasAnonKey: !!anonKey,
+    });
     // On error, redirect to login for safety
     if (request.nextUrl.pathname !== "/login") {
       return NextResponse.redirect(new URL("/login", request.url));
