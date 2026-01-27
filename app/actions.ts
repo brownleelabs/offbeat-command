@@ -149,6 +149,25 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
     
     // USE COOKIE-BASED CLIENT (Server Action): inject cookies explicitly
     const cookieStore = await cookies()
+    const cookieNames = cookieStore
+      .getAll()
+      .map((c) => c.name)
+      .slice(0, 50)
+    const supabaseCookieNames = cookieNames.filter(
+      (n) => n.includes('sb-') || n.includes('supabase')
+    )
+    if (supabaseCookieNames.length === 0) {
+      console.warn('[submitClaim] ⚠️ No Supabase auth cookies on request', {
+        totalCookies: cookieNames.length,
+        cookieNames,
+      })
+    } else {
+      console.log('[submitClaim] 🍪 Supabase auth cookies present', {
+        supabaseCookieCount: supabaseCookieNames.length,
+        supabaseCookieNames,
+      })
+    }
+
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
         getAll() {
