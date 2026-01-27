@@ -1022,6 +1022,9 @@ function FleetTab({
           {showFleetWrite && (
             <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-white/5 p-1.5 pr-2">
               <select
+                id="fleet-target-campaign"
+                name="fleetTargetCampaign"
+                aria-label="Select campaign to assign"
                 value={targetCampaignId}
                 onChange={(e) => setTargetCampaignId(e.target.value)}
                 className="h-9 w-64 min-w-[14rem] rounded border border-white/5 bg-black/20 text-sm focus:ring-2 focus:ring-primary/20"
@@ -1048,6 +1051,9 @@ function FleetTab({
               {isSuperAdmin && (
                 <>
                   <select
+                    id="fleet-target-organization"
+                    name="fleetTargetOrganization"
+                    aria-label="Select organization to transfer fleet to"
                     value={targetSchoolId}
                     onChange={(e) => setTargetSchoolId(e.target.value)}
                     className="h-9 w-64 min-w-[14rem] rounded border border-white/5 bg-black/20 text-sm focus:ring-2 focus:ring-primary/20"
@@ -1110,6 +1116,8 @@ function FleetTab({
               <tr>
                 <th className="p-4">
                   <input
+                    name="fleetSelectAll"
+                    aria-label="Select all assets"
                     type="checkbox"
                     checked={tokens.length > 0 && selectedTokenIds.size === tokens.length}
                     onChange={(e) => toggleAll(e.target.checked)}
@@ -1128,6 +1136,8 @@ function FleetTab({
                 <tr key={t.id} className="hover:bg-white/5">
                   <td className="p-4">
                     <input
+                      name={`fleetSelect_${t.id}`}
+                      aria-label={`Select asset ${t.id}`}
                       type="checkbox"
                       checked={selectedTokenIds.has(t.id)}
                       onChange={() => toggleOne(t.id)}
@@ -1264,8 +1274,13 @@ function CampaignsTab({
             </legend>
             {userRole === "SUPER_ADMIN" && orgId === null && (
               <div className="space-y-2">
-                <label className="block text-sm text-muted-foreground">Organization</label>
+                <label htmlFor="create-campaign-org" className="block text-sm text-muted-foreground">
+                  Organization
+                </label>
                 <select
+                  id="create-campaign-org"
+                  name="createCampaignOrganization"
+                  aria-label="Organization for new campaign"
                   value={createOrgId}
                   onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
                   className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
@@ -1283,8 +1298,12 @@ function CampaignsTab({
               </div>
             )}
             <div className="space-y-2">
-              <label className="block text-sm text-muted-foreground">Campaign name</label>
+              <label htmlFor="create-campaign-name" className="block text-sm text-muted-foreground">
+                Campaign name
+              </label>
               <input
+                id="create-campaign-name"
+                name="createCampaignName"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -1312,9 +1331,9 @@ function CampaignsTab({
           {/* Right column — Additional questions */}
           <div className="space-y-4 lg:col-span-7">
             <div className="flex items-center justify-between">
-              <label className="text-sm text-muted-foreground">
+              <p className="text-sm text-muted-foreground">
                 Additional questions (up to {MAX_QUESTIONS})
-              </label>
+              </p>
               {questions.length < MAX_QUESTIONS && (
                 <button
                   type="button"
@@ -1332,6 +1351,9 @@ function CampaignsTab({
                   className="group relative flex gap-2 rounded-md transition-colors hover:bg-white/5"
                 >
                   <input
+                    id={`create-campaign-question-${i}`}
+                    name={`createCampaignQuestion${i + 1}`}
+                    aria-label={`Campaign question ${i + 1}`}
                     type="text"
                     value={q}
                     onChange={(e) => setQuestion(i, e.target.value)}
@@ -1370,6 +1392,8 @@ function CampaignsTab({
           <h2 className="text-xl font-bold">{showArchivedCampaigns ? "All Surveys" : "Active Surveys"}</h2>
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
             <input
+              name="showArchivedCampaigns"
+              aria-label="Show archived campaigns"
               type="checkbox"
               checked={showArchivedCampaigns}
               onChange={(e) => setShowArchivedCampaigns(e.target.checked)}
@@ -1462,6 +1486,8 @@ function SettingsTab({
                 return (
                   <label key={id} className="flex cursor-pointer items-center gap-3">
                     <input
+                      name={`rolePermission_${id}`}
+                      aria-label={`Toggle permission ${PERMISSION_LABELS[key] ?? key} for role ${role}`}
                       type="checkbox"
                       checked={enabled}
                       disabled={updating === id}
@@ -1638,10 +1664,12 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
             <h3 className="mb-4 text-lg font-semibold">Deal Parameters</h3>
             <div className="space-y-4">
               <div>
-                <label className="mb-1 block text-sm text-muted-foreground">
+                <label htmlFor="pricing-deal-name" className="mb-1 block text-sm text-muted-foreground">
                   Institution / Opportunity Name
                 </label>
                 <input
+                  id="pricing-deal-name"
+                  name="pricingDealName"
                   type="text"
                   value={name}
                   onChange={(e) => {
@@ -1654,7 +1682,7 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
               </div>
 
               <div>
-                <label className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
+                <label htmlFor="pricing-target-students" className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
                   Campus Impact Scale (S)
                   <span
                     className="cursor-help text-xs text-slate-500"
@@ -1664,6 +1692,8 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
                   </span>
                 </label>
                 <input
+                  id="pricing-target-students"
+                  name="pricingTargetStudents"
                   type="number"
                   value={targetStudents}
                   onChange={(e) => setTargetStudents(Number(e.target.value) || 0)}
@@ -1674,7 +1704,7 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
               </div>
 
               <div>
-                <label className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
+                <label htmlFor="pricing-redemption-velocity" className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
                   Utilization Intensity (R<sub>pm</sub>)
                   <span
                     className="cursor-help text-xs text-slate-500"
@@ -1684,6 +1714,8 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
                   </span>
                 </label>
                 <input
+                  id="pricing-redemption-velocity"
+                  name="pricingRedemptionVelocity"
                   type="number"
                   value={redemptionVelocity}
                   onChange={(e) => setRedemptionVelocity(Number(e.target.value) || 0)}
@@ -1694,7 +1726,7 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
               </div>
 
               <div>
-                <label className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
+                <label htmlFor="pricing-assumed-yield-rate" className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
                   Market Yield Environment (r<sub>deal</sub>)
                   <span
                     className="cursor-help text-xs text-slate-500"
@@ -1705,6 +1737,8 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
                 </label>
                 <div className="flex items-center gap-2">
                   <input
+                    id="pricing-assumed-yield-rate"
+                    name="pricingAssumedYieldRate"
                     type="number"
                     value={assumedYieldRate}
                     onChange={(e) => setAssumedYieldRate(Number(e.target.value) || 0)}

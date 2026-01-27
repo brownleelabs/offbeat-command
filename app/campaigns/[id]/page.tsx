@@ -246,8 +246,15 @@ export default function CampaignDetailPage() {
             </ul>
           </div>
 
-          <label className="mb-1 block text-sm text-muted-foreground">Campaign name</label>
+          <label
+            htmlFor="campaign-name"
+            className="mb-1 block text-sm text-muted-foreground"
+          >
+            Campaign name
+          </label>
           <input
+            id="campaign-name"
+            name="campaignName"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -255,9 +262,9 @@ export default function CampaignDetailPage() {
           />
 
           <div className="mb-2 flex items-center justify-between">
-            <label className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               Additional questions (up to {MAX_QUESTIONS})
-            </label>
+            </p>
             {questions.length < MAX_QUESTIONS && (
               <button
                 type="button"
@@ -272,6 +279,9 @@ export default function CampaignDetailPage() {
             {questions.map((q, i) => (
               <div key={i} className="flex gap-2">
                 <input
+                  id={`campaign-question-${i}`}
+                  name={`campaignQuestion${i + 1}`}
+                  aria-label={`Campaign question ${i + 1}`}
                   type="text"
                   value={q}
                   onChange={(e) => setQuestion(i, e.target.value)}
