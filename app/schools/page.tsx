@@ -16,6 +16,7 @@ export default function SchoolsPage() {
       const { data } = await supabase
         .from("organizations")
         .select("id, name, slug")
+        .eq("type", "school")
         .order("name");
       setOrgs((data as OrgRow[]) ?? []);
     })().finally(() => setLoading(false));

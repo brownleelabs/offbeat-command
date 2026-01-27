@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
 
@@ -22,6 +22,7 @@ import type { Campaign, TokenWithCampaign } from "@/types";
 import type { CampaignQuestion } from "@/types";
 import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
 
+/** Campus/tenant entity. In the DB: table `organizations`. Public-facing UI uses "school" (e.g. /schools); Command Center uses "organization". */
 type Organization = { id: string; name: string };
 
 type Tab = "map" | "fleet" | "campaigns" | "settings";
@@ -45,12 +46,13 @@ function getEffectivePermissions(
 
 const MAX_QUESTIONS = 10;
 
-/** Normalize raw token rows so Fleet tab always has TokenWithCampaign shape (lat/lng, campaigns). */
+/** Normalize raw token rows so Fleet tab always has TokenWithCampaign shape (lat/lng, campaigns, organizations). */
 function normalizeTokensWithCampaign(rows: unknown[]): TokenWithCampaign[] {
   return rows.map((row) => {
     const r = row as Record<string, unknown>;
     const lat = (r.lat as number) ?? (r.latitude as number) ?? 0;
     const lng = (r.lng as number) ?? (r.longitude as number) ?? 0;
+    const org = (r.organizations ?? r.organization) as { name: string } | null | undefined;
     return {
       id: String(r.id),
       lat: Number(lat),
@@ -59,6 +61,7 @@ function normalizeTokensWithCampaign(rows: unknown[]): TokenWithCampaign[] {
       organization_id: (r.organization_id as string) ?? null,
       campaign_id: (r.campaign_id as string) ?? null,
       campaigns: (r.campaigns as { name: string } | null) ?? null,
+      organizations: org ?? null,
     };
   });
 }
@@ -69,9 +72,15 @@ function isAdminRole(role: string | undefined): role is (typeof ADMIN_ROLES)[num
 }
 
 export default function AdminDashboard() {
-  const { viewMode, toggleViewMode, userRole, orgId, loading, profile, authError } = useDashboard();
+  const { viewMode, toggleViewMode, userRole, orgId, dataScopeOrgId, loading, profile, authError } = useDashboard();
+  const searchParams = useSearchParams();
   const [orgName, setOrgName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("map");
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "map" || tab === "fleet" || tab === "campaigns" || tab === "settings") setActiveTab(tab);
+  }, [searchParams]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [tokens, setTokens] = useState<TokenWithCampaign[]>([]);
   const [responsesCount, setResponsesCount] = useState<number>(0);
@@ -81,6 +90,7 @@ export default function AdminDashboard() {
   const [targetSchoolId, setTargetSchoolId] = useState("");
   const [assignToSchoolMessage, setAssignToSchoolMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [rolePermissions, setRolePermissions] = useState<RolePermissionRow[]>([]);
+  const [showArchivedCampaigns, setShowArchivedCampaigns] = useState(false);
 
   const supabase = createClient();
   const effectivePermissions = getEffectivePermissions(userRole, rolePermissions);
@@ -91,7 +101,7 @@ export default function AdminDashboard() {
     getRolePermissions().then(setRolePermissions);
   }, [userRole]);
 
-  // Fetch all schools (organizations) for SUPER_ADMIN bulk-assign dropdown
+  // Fetch organizations of type 'school' only (Super Admin dropdowns: Create Campaign + Fleet assign). Never show 'institution'.
   useEffect(() => {
     if (userRole !== "SUPER_ADMIN") return;
     let cancelled = false;
@@ -99,6 +109,7 @@ export default function AdminDashboard() {
     client
       .from("organizations")
       .select("id, name")
+      .eq("type", "school")
       .order("name")
       .then(({ data }) => {
         if (!cancelled && data) setOrganizations((data as Organization[]) ?? []);
@@ -106,8 +117,12 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, [userRole]);
 
-  // Fetch organization name when we have orgId and need it for display (STUDENT or ORG_ADMIN/AUDITOR)
+  // Fetch organization name when we have orgId and need it for display (ORG_ADMIN). AUDITOR shows "All (read-only)"; SUPER_ADMIN GLOBAL uses view mode label.
   useEffect(() => {
+    if (userRole === "AUDITOR") {
+      setOrgName("All (read-only)");
+      return;
+    }
     if (!orgId || !userRole) return;
     if (userRole === "SUPER_ADMIN" && viewMode === "GLOBAL") return;
     let cancelled = false;
@@ -130,23 +145,27 @@ export default function AdminDashboard() {
   }, [orgId, userRole, viewMode]);
 
   const loadData = useCallback(async () => {
+    const filterOrgId = dataScopeOrgId;
+
     let campaignsQuery = supabase
       .from("campaigns")
       .select("*")
-      .is("deleted_at", null)
       .order("created_at", { ascending: false });
-    if (orgId != null) {
-      campaignsQuery = campaignsQuery.eq("organization_id", orgId);
+    if (!showArchivedCampaigns) {
+      campaignsQuery = campaignsQuery.is("deleted_at", null);
+    }
+    if (filterOrgId != null) {
+      campaignsQuery = campaignsQuery.eq("organization_id", filterOrgId);
     }
     const { data: cData } = await campaignsQuery;
     setCampaigns((cData as Campaign[]) ?? []);
 
     let tokensQuery = supabase
       .from("tokens")
-      .select("*, campaigns(name)")
+      .select("*, campaigns(name), organizations(name)")
       .order("id");
-    if (orgId != null) {
-      tokensQuery = tokensQuery.eq("organization_id", orgId);
+    if (filterOrgId != null) {
+      tokensQuery = tokensQuery.eq("organization_id", filterOrgId);
     }
     const { data: tData, error } = await tokensQuery;
     if (!error && tData) {
@@ -156,8 +175,8 @@ export default function AdminDashboard() {
         console.warn("Fleet join failed, loading tokens only:", error.message);
       }
       let tokensOnlyQuery = supabase.from("tokens").select("*").order("id");
-      if (orgId != null) {
-        tokensOnlyQuery = tokensOnlyQuery.eq("organization_id", orgId);
+      if (filterOrgId != null) {
+        tokensOnlyQuery = tokensOnlyQuery.eq("organization_id", filterOrgId);
       }
       const { data: tokensOnly } = await tokensOnlyQuery;
       setTokens(normalizeTokensWithCampaign(tokensOnly ?? []));
@@ -166,16 +185,23 @@ export default function AdminDashboard() {
     let responsesQuery = supabase
       .from("responses")
       .select("*", { count: "exact", head: true });
-    if (orgId != null) {
-      responsesQuery = responsesQuery.eq("organization_id", orgId);
+    if (filterOrgId != null) {
+      responsesQuery = responsesQuery.eq("organization_id", filterOrgId);
     }
     const { count } = await responsesQuery;
     setResponsesCount(count ?? 0);
-  }, [orgId]);
+  }, [dataScopeOrgId, showArchivedCampaigns, supabase]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // ORG_ADMIN: keep targetSchoolId in sync with their org so "Assign to my organization" works
+  useEffect(() => {
+    if (userRole === "ORG_ADMIN" && profile?.organization_id) {
+      setTargetSchoolId(profile.organization_id);
+    }
+  }, [userRole, profile?.organization_id]);
 
   // Realtime: keep Fleet, Stats, and Map in sync when tokens or responses change (no refresh needed)
   useEffect(() => {
@@ -188,12 +214,12 @@ export default function AdminDashboard() {
           event: "UPDATE",
           schema: "public",
           table: "tokens",
-          ...(orgId != null ? { filter: `organization_id=eq.${orgId}` } : {}),
+          ...(dataScopeOrgId != null ? { filter: `organization_id=eq.${dataScopeOrgId}` } : {}),
         },
         (payload: { new: Record<string, unknown> }) => {
           const row = payload.new;
           const incomingOrgId = row.organization_id as string | null | undefined;
-          if (orgId != null && incomingOrgId !== orgId) return;
+          if (dataScopeOrgId != null && incomingOrgId !== dataScopeOrgId) return;
           setTokens((prev) => {
             const next = normalizeTokensWithCampaign([row]);
             const token = next[0];
@@ -201,7 +227,7 @@ export default function AdminDashboard() {
             const idx = prev.findIndex((t) => t.id === token.id);
             if (idx >= 0) {
               const out = [...prev];
-              out[idx] = { ...token, campaigns: prev[idx].campaigns ?? null };
+              out[idx] = { ...token, campaigns: prev[idx].campaigns ?? null, organizations: prev[idx].organizations ?? null };
               return out;
             }
             return [...prev, token];
@@ -214,12 +240,12 @@ export default function AdminDashboard() {
           event: "INSERT",
           schema: "public",
           table: "tokens",
-          ...(orgId != null ? { filter: `organization_id=eq.${orgId}` } : {}),
+          ...(dataScopeOrgId != null ? { filter: `organization_id=eq.${dataScopeOrgId}` } : {}),
         },
         (payload: { new: Record<string, unknown> }) => {
           const row = payload.new;
           const incomingOrgId = row.organization_id as string | null | undefined;
-          if (orgId != null && incomingOrgId !== orgId) return;
+          if (dataScopeOrgId != null && incomingOrgId !== dataScopeOrgId) return;
           setTokens((prev) => {
             const next = normalizeTokensWithCampaign([row]);
             const token = next[0];
@@ -234,11 +260,11 @@ export default function AdminDashboard() {
           event: "INSERT",
           schema: "public",
           table: "responses",
-          ...(orgId != null ? { filter: `organization_id=eq.${orgId}` } : {}),
+          ...(dataScopeOrgId != null ? { filter: `organization_id=eq.${dataScopeOrgId}` } : {}),
         },
         (payload: { new: { organization_id?: string | null } }) => {
           const row = payload.new;
-          if (orgId != null && row.organization_id !== orgId) return;
+          if (dataScopeOrgId != null && row.organization_id !== dataScopeOrgId) return;
           setResponsesCount((c) => c + 1);
         }
       )
@@ -247,16 +273,20 @@ export default function AdminDashboard() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userRole, orgId, supabase]);
+  }, [userRole, dataScopeOrgId, supabase]);
 
+  const UNASSIGN_CAMPAIGN_VALUE = "__unassign__";
   async function assignTokens() {
-    if (!targetCampaignId || selectedTokenIds.size === 0) return;
+    if (selectedTokenIds.size === 0) return;
+    if (targetCampaignId !== UNASSIGN_CAMPAIGN_VALUE && !targetCampaignId) return;
+    const payload = targetCampaignId === UNASSIGN_CAMPAIGN_VALUE ? { campaign_id: null } : { campaign_id: targetCampaignId };
     const { error } = await supabase
       .from("tokens")
-      .update({ campaign_id: targetCampaignId })
+      .update(payload)
       .in("id", Array.from(selectedTokenIds));
     if (!error) {
       setSelectedTokenIds(new Set());
+      setTargetCampaignId("");
       loadData();
     }
   }
@@ -266,7 +296,7 @@ export default function AdminDashboard() {
     setAssignToSchoolMessage(null);
     const result = await bulkAssignTokensToSchool(Array.from(selectedTokenIds), targetSchoolId);
     if (result.success) {
-      setAssignToSchoolMessage({ type: "success", text: `${result.count} token(s) assigned to school.` });
+      setAssignToSchoolMessage({ type: "success", text: `${result.count} token(s) assigned to organization.` });
       setSelectedTokenIds(new Set());
       loadData();
     } else {
@@ -293,16 +323,27 @@ export default function AdminDashboard() {
   if (!profile) {
     const isSessionMissing =
       authError?.toLowerCase().includes("session missing") ?? false;
+    const isLikelyVercelOrigin =
+      typeof window !== "undefined" &&
+      (window.location.hostname.endsWith(".vercel.app") || window.location.hostname === "vercel.app");
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-zinc-950 px-4 text-center text-white">
         {isSessionMissing ? (
           <>
             <h1 className="text-xl font-bold text-red-500">AUTH SESSION MISSING</h1>
-            <p className="max-w-md text-zinc-400">
-              Your browser or an extension (e.g. MetaMask, Lockdown) may be blocking
-              the auth session. Try: open this site in a private/incognito window, or
-              disable that extension for this site, then sign in again.
-            </p>
+            {isLikelyVercelOrigin ? (
+              <p className="max-w-md text-zinc-400">
+                On Vercel, Supabase Auth can return 403 if this deployment URL is not allowed. In Supabase
+                Dashboard → Authentication → URL Configuration, add this site to <strong>Redirect URLs</strong> and
+                set <strong>Site URL</strong> to your production or preview URL, then sign in again.
+              </p>
+            ) : (
+              <p className="max-w-md text-zinc-400">
+                Your browser or an extension (e.g. MetaMask, Lockdown) may be blocking
+                the auth session. Try: open this site in a private/incognito window, or
+                disable that extension for this site, then sign in again.
+              </p>
+            )}
             <div className="flex flex-col items-center gap-3 sm:flex-row">
               <a
                 href="/login"
@@ -455,7 +496,7 @@ export default function AdminDashboard() {
         {activeTab === "fleet" && (
           <FleetTab
             tokens={tokens}
-            campaigns={campaigns}
+            campaigns={campaigns.filter((c) => !c.deleted_at)}
             selectedTokenIds={selectedTokenIds}
             setSelectedTokenIds={setSelectedTokenIds}
             targetCampaignId={targetCampaignId}
@@ -464,6 +505,7 @@ export default function AdminDashboard() {
             onRefresh={loadData}
             orgId={orgId}
             userRole={userRole}
+            profile={profile}
             organizations={organizations}
             targetSchoolId={targetSchoolId}
             setTargetSchoolId={setTargetSchoolId}
@@ -479,7 +521,11 @@ export default function AdminDashboard() {
             onRefresh={loadData}
             supabase={supabase}
             orgId={orgId}
+            organizations={organizations}
+            userRole={userRole}
             campaignsWrite={effectivePermissions.campaignsWrite}
+            showArchivedCampaigns={showArchivedCampaigns}
+            setShowArchivedCampaigns={setShowArchivedCampaigns}
           />
         )}
 
@@ -608,6 +654,7 @@ function FleetTab({
   onRefresh,
   orgId,
   userRole,
+  profile,
   organizations,
   targetSchoolId,
   setTargetSchoolId,
@@ -625,6 +672,7 @@ function FleetTab({
   onRefresh: () => void;
   orgId: string | null;
   userRole: string | undefined;
+  profile: { role: string; organization_id: string | null } | null;
   organizations: Organization[];
   targetSchoolId: string;
   setTargetSchoolId: (id: string) => void;
@@ -642,7 +690,10 @@ function FleetTab({
     setSelectedTokenIds(checked ? new Set(tokens.map((t) => t.id)) : new Set());
   };
   const isSuperAdmin = userRole === "SUPER_ADMIN";
-  const showFleetWrite = fleetWrite || isSuperAdmin;
+  const isAuditor = userRole === "AUDITOR";
+  const showFleetWrite = (fleetWrite || isSuperAdmin) && !isAuditor;
+  const showOrgColumn = isSuperAdmin || isAuditor;
+  const canAssignToSchool = isSuperAdmin || (userRole === "ORG_ADMIN" && !!profile?.organization_id);
 
   return (
     <div className="mx-auto max-w-7xl p-8">
@@ -657,6 +708,7 @@ function FleetTab({
                 className="rounded border border-accent bg-muted p-2 text-sm"
               >
                 <option value="">Select Campaign to Assign...</option>
+                <option value="__unassign__">Clear Campaign (Unassigned)</option>
                 {campaigns.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -672,27 +724,36 @@ function FleetTab({
               </button>
             </>
           )}
-          {isSuperAdmin && (
+          {canAssignToSchool && (
             <>
-              <select
-                value={targetSchoolId}
-                onChange={(e) => setTargetSchoolId(e.target.value)}
-                className="rounded border border-accent bg-muted p-2 text-sm"
-                title="Assign selected tokens to a school"
-              >
-                <option value="">Select School...</option>
-                {organizations.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
+              {isSuperAdmin && (
+                <>
+                  <select
+                    value={targetSchoolId}
+                    onChange={(e) => setTargetSchoolId(e.target.value)}
+                    className="rounded border border-accent bg-muted p-2 text-sm"
+                    title="Assign selected tokens to an organization"
+                  >
+                    <option value="">Select organization...</option>
+                    {organizations.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                  {organizations.length === 0 && (
+                    <span className="text-xs text-amber-600 dark:text-amber-400" title="Add organizations in Supabase (see docs).">
+                      No organizations — add in Supabase
+                    </span>
+                  )}
+                </>
+              )}
               <button
                 onClick={onAssignToSchool}
                 disabled={!targetSchoolId || selectedTokenIds.size === 0}
                 className="rounded border-2 border-primary bg-primary/10 px-4 py-2 text-sm font-bold text-primary hover:bg-primary/20 disabled:opacity-50"
               >
-                ASSIGN TO SCHOOL
+                {isSuperAdmin ? "ASSIGN TO ORGANIZATION" : "ASSIGN TO MY ORGANIZATION"}
               </button>
             </>
           )}
@@ -727,6 +788,7 @@ function FleetTab({
                 onChange={(e) => toggleAll(e.target.checked)}
               />
             </th>
+            {showOrgColumn && <th className="p-4">Organization</th>}
             <th className="p-4">Asset ID</th>
             <th className="p-4">Coordinates</th>
             <th className="p-4">Active Campaign</th>
@@ -741,8 +803,16 @@ function FleetTab({
                   type="checkbox"
                   checked={selectedTokenIds.has(t.id)}
                   onChange={() => toggleOne(t.id)}
+                  disabled={isAuditor}
                 />
               </td>
+              {showOrgColumn && (
+                <td className="p-4">
+                  <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    {t.organizations?.name ?? "—"}
+                  </span>
+                </td>
+              )}
               <td className="font-mono p-4">...{t.id.slice(-8)}</td>
               <td className="p-4 text-muted-foreground">
                 {t.lat.toFixed(4)}, {t.lng.toFixed(4)}
@@ -768,17 +838,27 @@ function CampaignsTab({
   onRefresh,
   supabase,
   orgId,
+  organizations,
+  userRole,
   campaignsWrite,
+  showArchivedCampaigns,
+  setShowArchivedCampaigns,
 }: {
   campaigns: Campaign[];
   onRefresh: () => void;
   supabase: ReturnType<typeof createClient>;
   orgId: string | null;
+  organizations: Organization[];
+  userRole: string | undefined;
   campaignsWrite: boolean;
+  showArchivedCampaigns: boolean;
+  setShowArchivedCampaigns: (v: boolean) => void;
 }) {
   const [name, setName] = useState("");
   const [questions, setQuestions] = useState<string[]>([""]);
   const [saving, setSaving] = useState(false);
+  const [createOrgId, setCreateOrgId] = useState<string>("");
+  const [createError, setCreateError] = useState<string>("");
 
   const addQuestion = () => {
     if (questions.length >= MAX_QUESTIONS) return;
@@ -798,6 +878,23 @@ function CampaignsTab({
   async function createCampaign() {
     const trimmedName = name.trim();
     if (!trimmedName) return;
+    const targetOrgId = orgId ?? (createOrgId || null);
+    if (!targetOrgId) {
+      setCreateError("Select an organization for this campaign.");
+      return;
+    }
+    const { data: existing } = await supabase
+      .from("campaigns")
+      .select("id")
+      .eq("organization_id", targetOrgId)
+      .eq("name", trimmedName)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (existing) {
+      setCreateError("A campaign with this name already exists for this organization.");
+      return;
+    }
+    setCreateError("");
     const qs: CampaignQuestion[] = questions
       .map((text, order) => ({ order: order + 1, text: text.trim() }))
       .filter((q) => q.text.length > 0);
@@ -806,13 +903,16 @@ function CampaignsTab({
       name: trimmedName,
       required_fields: CAMPAIGN_REQUIRED_FIELDS,
       questions: qs.length ? qs : null,
-      organization_id: orgId,
+      organization_id: targetOrgId,
     });
     setSaving(false);
     if (!error) {
       setName("");
       setQuestions([""]);
+      setCreateOrgId("");
       onRefresh();
+    } else {
+      setCreateError(error.message);
     }
   }
 
@@ -826,6 +926,27 @@ function CampaignsTab({
       <div className="h-fit rounded-xl border border-accent bg-muted p-6">
         <h2 className="mb-4 text-xl font-bold">Create Campaign</h2>
         <div className="space-y-4">
+          {/* SUPER_ADMIN in Global must choose org */}
+          {userRole === "SUPER_ADMIN" && orgId === null && (
+            <>
+              <label className="block text-sm text-muted-foreground">Organization</label>
+              <select
+                value={createOrgId}
+                onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
+                className="w-full rounded border border-accent bg-background px-3 py-2 text-sm"
+              >
+                <option value="">Select organization...</option>
+                {organizations.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+              {organizations.length === 0 && (
+                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                  No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
+                </p>
+              )}
+            </>
+          )}
           {/* Required fields – fixed for reward payout */}
           <div className="rounded-lg border border-success/30 bg-background/95 p-3">
             <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-success">
@@ -887,9 +1008,10 @@ function CampaignsTab({
               )}
             </div>
           ))}
+          {createError && <p className="text-sm text-destructive">{createError}</p>}
           <button
             onClick={createCampaign}
-            disabled={saving || !name.trim()}
+            disabled={saving || !name.trim() || (orgId === null && !createOrgId)}
             className="w-full rounded bg-primary py-2 font-bold text-primary-foreground disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save Campaign"}
@@ -899,7 +1021,18 @@ function CampaignsTab({
       )}
 
       <div className="space-y-4 md:col-span-2">
-        <h2 className="text-xl font-bold">Active Surveys</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-xl font-bold">{showArchivedCampaigns ? "All Surveys" : "Active Surveys"}</h2>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={showArchivedCampaigns}
+              onChange={(e) => setShowArchivedCampaigns(e.target.checked)}
+              className="rounded border-accent"
+            />
+            Show archived
+          </label>
+        </div>
         {campaigns.length === 0 && (
           <p className="text-sm italic text-muted-foreground">No campaigns yet.</p>
         )}
@@ -911,6 +1044,14 @@ function CampaignsTab({
           >
             <div>
               <span className="font-bold">{c.name}</span>
+              {organizations.length > 0 && (
+                <span className="ml-2 rounded bg-muted-foreground/20 px-1.5 py-0.5 text-xs text-muted-foreground">
+                  {organizations.find((o) => o.id === c.organization_id)?.name ?? "—"}
+                </span>
+              )}
+              {(c as Campaign & { deleted_at?: string | null }).deleted_at && (
+                <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400">Archived</span>
+              )}
               <p className="font-mono text-xs text-muted-foreground">{c.id}</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {requiredCount} required fields

@@ -51,6 +51,8 @@ export interface Campaign {
   name: string;
   created_at?: string;
   organization_id: string | null;
+  /** Soft delete; when set, campaign is archived and claims are blocked. */
+  deleted_at?: string | null;
   /** Required fields for reward payout; stored as JSONB. */
   required_fields?: CampaignRequiredField[];
   /** Up to 10 custom questions; stored as JSONB in DB. */
@@ -62,10 +64,12 @@ export interface CampaignQuestion {
   text: string;
 }
 
-/** Token row joined with campaign (for Fleet table). Use select('*, campaigns(name)'). */
+/** Token row joined with campaign and optional org (for Fleet table). Use select('*, campaigns(name), organizations(name)'). */
 export interface TokenWithCampaign extends Token {
   campaign_id?: string | null;
   campaigns: { name: string } | null;
+  /** Present when query includes organizations join; used for org column when SUPER_ADMIN or AUDITOR. */
+  organizations?: { name: string } | null;
 }
 
 export type UserRole = "SUPER_ADMIN" | "ORG_ADMIN" | "AUDITOR" | "STUDENT";

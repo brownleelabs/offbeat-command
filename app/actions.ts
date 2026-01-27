@@ -83,7 +83,7 @@ function normalizeClaimTokenId(raw: string): string {
   return s
 }
 
-/** Load token + campaign for claim page. Uses service role so anonymous users can open the claim form. Never throws – returns null on any error to avoid RSC digest leaks. */
+/** Load token + campaign for claim page. Uses service role. Returns full token (including status) and campaign (including deleted_at). Never throws – returns null on any error. */
 export async function getTokenForClaim(tokenId: string) {
   if (!hasServiceRoleKey()) {
     console.error('[claim] getTokenForClaim: SUPABASE_SERVICE_ROLE_KEY is missing. Add it to .env.local and restart.')
@@ -96,7 +96,7 @@ export async function getTokenForClaim(tokenId: string) {
 
     const { data: token, error: tokenErr } = await supabase
       .from('tokens')
-      .select('id, campaign_id')
+      .select('id, lat, lng, status, organization_id, campaign_id')
       .eq('id', id)
       .maybeSingle()
 
@@ -109,7 +109,16 @@ export async function getTokenForClaim(tokenId: string) {
       return null
     }
 
-    const campaignId = (token as { campaign_id: string | null }).campaign_id
+    const t = token as { id: string; lat?: number; lng?: number; status?: string; organization_id?: string | null; campaign_id?: string | null }
+    const fullToken = {
+      id: t.id,
+      lat: Number(t.lat) || 0,
+      lng: Number(t.lng) || 0,
+      status: (t.status === 'found' ? 'found' : 'active') as 'active' | 'found',
+      organization_id: t.organization_id ?? null,
+    }
+
+    const campaignId = t.campaign_id ?? null
     let campaign: unknown = null
     if (campaignId) {
       const { data: camp } = await supabase
@@ -120,7 +129,7 @@ export async function getTokenForClaim(tokenId: string) {
       campaign = camp
     }
 
-    return { token: { id: (token as { id: string }).id, campaign_id: campaignId }, campaign }
+    return { token: fullToken, campaign }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     if (msg.includes('SERVICE_ROLE') || msg.includes('Missing')) {
@@ -213,13 +222,13 @@ export async function submitClaim(input: SubmitClaimInput) {
 }
 
 
-/** SUPER_ADMIN only: bulk assign selected tokens to a school (organization). Uses service role after role check. */
+/** SUPER_ADMIN or ORG_ADMIN: bulk assign selected tokens to an organization. SUPER_ADMIN may pick any org; ORG_ADMIN is limited to their profile.organization_id. */
 export async function bulkAssignTokensToSchool(
   tokenIds: string[],
   organizationId: string
 ): Promise<BulkAssignToSchoolResult> {
   if (!tokenIds?.length || !organizationId?.trim()) {
-    return { success: false, error: 'Select at least one token and a school.' }
+    return { success: false, error: 'Select at least one token and an organization.' }
   }
   try {
     const supabaseAuth = await createServerSupabase()
@@ -228,13 +237,23 @@ export async function bulkAssignTokensToSchool(
 
     const { data: profile } = await supabaseAuth
       .from('profiles')
-      .select('role')
+      .select('role, organization_id')
       .eq('id', user.id)
       .single()
 
-    const role = (profile as { role?: string } | null)?.role
-    if (role !== 'SUPER_ADMIN') {
-      return { success: false, error: 'Only SUPER_ADMIN can assign tokens to schools.' }
+    const role = (profile as { role?: string; organization_id?: string | null } | null)?.role
+    const profileOrgId = (profile as { organization_id?: string | null } | null)?.organization_id ?? null
+
+    let effectiveOrgId: string
+    if (role === 'SUPER_ADMIN') {
+      effectiveOrgId = organizationId.trim()
+    } else if (role === 'ORG_ADMIN' && profileOrgId) {
+      if (organizationId.trim() !== profileOrgId) {
+        return { success: false, error: 'You can only assign tokens to your own organization.' }
+      }
+      effectiveOrgId = profileOrgId
+    } else {
+      return { success: false, error: 'Only SUPER_ADMIN or ORG_ADMIN can assign tokens to organizations.' }
     }
 
     if (!hasServiceRoleKey()) {
@@ -248,7 +267,7 @@ export async function bulkAssignTokensToSchool(
 
     const { error } = await supabase
       .from('tokens')
-      .update({ organization_id: organizationId.trim() })
+      .update({ organization_id: effectiveOrgId })
       .in('id', ids)
 
     if (error) {

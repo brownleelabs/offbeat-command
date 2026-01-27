@@ -82,6 +82,7 @@ async function getTokenForClaim(
       .eq("id", campaignId)
       .single();
     campaign = (camp as Campaign) ?? null;
+    // Treat archived campaigns as missing for claim flow (will show "This campaign has ended.")
   }
 
   return { token: tokenData, campaign };
@@ -145,6 +146,30 @@ export default async function ClaimPage({
       <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
         <div className="mb-4 text-6xl">💀</div>
         <h1 className="text-2xl font-bold text-zinc-300">ALREADY CLAIMED</h1>
+      </div>
+    );
+  }
+
+  // 4. Token has no campaign (Unassigned) – block claim
+  if (!campaign) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
+        <h1 className="text-xl font-bold text-amber-500">This asset is not currently active.</h1>
+        <p className="mt-2 max-w-md text-center text-zinc-400">
+          This token is not assigned to a campaign. Contact the organizer if you believe this is an error.
+        </p>
+      </div>
+    );
+  }
+
+  // 5. Campaign is archived – block claim
+  if ((campaign as Campaign & { deleted_at?: string | null }).deleted_at) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
+        <h1 className="text-xl font-bold text-amber-500">This campaign has ended.</h1>
+        <p className="mt-2 max-w-md text-center text-zinc-400">
+          Submissions are no longer accepted for this campaign.
+        </p>
       </div>
     );
   }

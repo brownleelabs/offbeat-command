@@ -35,6 +35,8 @@ export default function CampaignDetailPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [assignedTokenCount, setAssignedTokenCount] = useState<number | null>(null);
+  const [saveError, setSaveError] = useState<string>("");
 
   useEffect(() => {
     if (!id) return;
@@ -127,7 +129,23 @@ export default function CampaignDetailPage() {
 
   async function handleSave() {
     if (!id || !name.trim()) return;
+    setSaveError("");
     const supabase = createClient();
+    const orgId = campaign?.organization_id ?? null;
+    if (orgId != null) {
+      const { data: existing } = await supabase
+        .from("campaigns")
+        .select("id")
+        .eq("organization_id", orgId)
+        .eq("name", name.trim())
+        .neq("id", id)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (existing) {
+        setSaveError("A campaign with this name already exists for this organization.");
+        return;
+      }
+    }
     const qs: CampaignQuestion[] = questions
       .map((text, order) => ({ order: order + 1, text: text.trim() }))
       .filter((q) => q.text.length > 0);
@@ -141,6 +159,8 @@ export default function CampaignDetailPage() {
       setCampaign((prev) =>
         prev ? { ...prev, name: name.trim(), questions: qs } : null
       );
+    } else {
+      setSaveError(error.message);
     }
   }
 
@@ -159,6 +179,17 @@ export default function CampaignDetailPage() {
       console.error("Archive failed:", error);
       alert("Could not archive campaign.");
     }
+  }
+
+  async function confirmArchiveClick() {
+    if (!id) return;
+    const supabase = createClient();
+    const { count } = await supabase
+      .from("tokens")
+      .select("*", { count: "exact", head: true })
+      .eq("campaign_id", id);
+    setAssignedTokenCount(count ?? 0);
+    setConfirmDelete(true);
   }
 
   if (loading) {
@@ -261,6 +292,7 @@ export default function CampaignDetailPage() {
             ))}
           </div>
 
+          {saveError && <p className="mb-4 text-sm text-destructive">{saveError}</p>}
           <div className="flex flex-wrap items-center gap-4 border-t border-accent pt-6">
             <button
               onClick={handleSave}
@@ -270,7 +302,12 @@ export default function CampaignDetailPage() {
               {saving ? "Saving..." : "Save changes"}
             </button>
             {confirmDelete ? (
-              <span className="flex items-center gap-2">
+              <span className="flex flex-wrap items-center gap-2">
+                {assignedTokenCount != null && assignedTokenCount > 0 && (
+                  <span className="text-sm text-amber-600 dark:text-amber-400">
+                    This campaign is assigned to {assignedTokenCount} token(s). Archiving will deactivate them.
+                  </span>
+                )}
                 <button
                   onClick={handleDelete}
                   disabled={deleting}
@@ -279,7 +316,7 @@ export default function CampaignDetailPage() {
                   {deleting ? "Archiving..." : "Yes, archive"}
                 </button>
                 <button
-                  onClick={() => setConfirmDelete(false)}
+                  onClick={() => { setConfirmDelete(false); setAssignedTokenCount(null); }}
                   className="rounded border border-accent px-4 py-2 text-sm text-muted-foreground"
                 >
                   Cancel
@@ -287,7 +324,7 @@ export default function CampaignDetailPage() {
               </span>
             ) : (
               <button
-                onClick={() => setConfirmDelete(true)}
+                onClick={confirmArchiveClick}
                 className="flex items-center gap-2 rounded border border-destructive/50 px-4 py-2 text-sm text-destructive hover:bg-destructive/10"
               >
                 <Trash2 className="h-4 w-4" />

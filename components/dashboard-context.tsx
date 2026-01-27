@@ -29,8 +29,10 @@ export type ViewMode = "GLOBAL" | "TENANT";
 interface DashboardContextValue {
   /** Current user's role from profile, or undefined if no profile loaded. */
   userRole: UserRole | undefined;
-  /** Effective org for filtering: locked to profile.organization_id for non–SUPER_ADMIN; selected org in TENANT for SUPER_ADMIN; null in GLOBAL for SUPER_ADMIN. */
+  /** Effective org for UI (dropdown selection, labels). For AUDITOR this is still profile.organization_id; for ORG_ADMIN/STUDENT it's their org; for SUPER_ADMIN it's null (GLOBAL) or selectedOrgId (TENANT). */
   orgId: string | null;
+  /** Org to use when filtering data (tokens, campaigns, responses). AUDITOR and SUPER_ADMIN in GLOBAL see all (null); ORG_ADMIN/STUDENT and SUPER_ADMIN in TENANT use one org. */
+  dataScopeOrgId: string | null;
   /** GLOBAL = see all orgs (SUPER_ADMIN only); TENANT = filter by one org. Non–SUPER_ADMIN are always TENANT. */
   viewMode: ViewMode;
   /** Toggle between GLOBAL and TENANT. No-op unless role === 'SUPER_ADMIN'. */
@@ -176,10 +178,18 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
     return selectedOrgId;
   }, [profile, viewMode, selectedOrgId]);
 
+  // dataScopeOrgId: for fetching tokens/campaigns/responses. AUDITOR sees all (null); SUPER_ADMIN GLOBAL = null; else orgId
+  const dataScopeOrgId = useMemo(() => {
+    if (!profile) return null;
+    if (profile.role === "AUDITOR") return null;
+    return orgId;
+  }, [profile, orgId]);
+
   const value = useMemo<DashboardContextValue>(
     () => ({
       userRole: profile?.role,
       orgId,
+      dataScopeOrgId,
       viewMode,
       toggleViewMode: effectiveToggleViewMode,
       selectedOrgId,
@@ -191,6 +201,7 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
     [
       profile,
       orgId,
+      dataScopeOrgId,
       viewMode,
       effectiveToggleViewMode,
       selectedOrgId,
