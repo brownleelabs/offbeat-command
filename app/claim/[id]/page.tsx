@@ -3,7 +3,7 @@ import ClaimForm from "@/components/claim-form";
 import type { Campaign, Token } from "@/types";
 
 const UUID_REGEX =
-  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function normalizeClaimId(raw: string): string {
   let s = String(raw ?? "");
@@ -16,6 +16,11 @@ function normalizeClaimId(raw: string): string {
   const match = s.match(UUID_REGEX);
   if (match) return match[0].toLowerCase();
   return s;
+}
+
+/** Strict UUID validation - returns true only if the string is exactly a valid UUID. */
+function isValidUUID(id: string): boolean {
+  return UUID_REGEX.test(id);
 }
 
 // Lazy load helper – prevents "supabaseKey is required" crash at startup
@@ -47,45 +52,68 @@ async function getTokenForClaim(
   }
 
   const normalizedId = normalizeClaimId(id);
+  
+  // Strict UUID validation - must match exactly before querying Supabase
+  if (!isValidUUID(normalizedId)) {
+    console.error(`❌ [Claim] Invalid UUID format: ${normalizedId}`);
+    return null;
+  }
+
   console.log(`🔍 [Claim] Looking up token: ${normalizedId}`);
 
-  const { data: token, error } = await supabaseAdmin
-    .from("tokens")
-    .select("id, lat, lng, status, organization_id, campaign_id")
-    .eq("id", normalizedId)
-    .maybeSingle();
+  try {
+    const { data: token, error } = await supabaseAdmin
+      .from("tokens")
+      .select("id, lat, lng, status, organization_id, campaign_id")
+      .eq("id", normalizedId)
+      .maybeSingle();
 
-  if (error) {
-    console.error("❌ [Claim] DB Error:", error.message);
+    if (error) {
+      console.error("❌ [Claim] DB Error:", error.message);
+      return null;
+    }
+
+    if (!token) {
+      console.error("❌ [Claim] Token not found:", normalizedId);
+      return null;
+    }
+
+    const tokenData: Token = {
+      id: (token as { id: string }).id,
+      lat: Number((token as { lat: number }).lat) || 0,
+      lng: Number((token as { lng: number }).lng) || 0,
+      status: (token as { status: string }).status === "found" ? "found" : "active",
+      organization_id: (token as { organization_id?: string | null }).organization_id ?? null,
+    };
+
+    const campaignId = (token as { campaign_id?: string | null }).campaign_id ?? null;
+    let campaign: Campaign | null = null;
+    if (campaignId) {
+      try {
+        const { data: camp, error: campError } = await supabaseAdmin
+          .from("campaigns")
+          .select("*")
+          .eq("id", campaignId)
+          .single();
+        
+        if (campError) {
+          console.error("❌ [Claim] Campaign fetch error:", campError.message);
+          // Continue without campaign - will show "not assigned" message
+        } else {
+          campaign = (camp as Campaign) ?? null;
+          // Treat archived campaigns as missing for claim flow (will show "This campaign has ended.")
+        }
+      } catch (err) {
+        console.error("❌ [Claim] Campaign fetch exception:", err);
+        // Continue without campaign
+      }
+    }
+
+    return { token: tokenData, campaign };
+  } catch (err) {
+    console.error("❌ [Claim] getTokenForClaim exception:", err);
     return null;
   }
-
-  if (!token) {
-    console.error("❌ [Claim] Token not found:", normalizedId);
-    return null;
-  }
-
-  const tokenData: Token = {
-    id: (token as { id: string }).id,
-    lat: Number((token as { lat: number }).lat) || 0,
-    lng: Number((token as { lng: number }).lng) || 0,
-    status: (token as { status: string }).status === "found" ? "found" : "active",
-    organization_id: (token as { organization_id?: string | null }).organization_id ?? null,
-  };
-
-  const campaignId = (token as { campaign_id?: string | null }).campaign_id ?? null;
-  let campaign: Campaign | null = null;
-  if (campaignId) {
-    const { data: camp } = await supabaseAdmin
-      .from("campaigns")
-      .select("*")
-      .eq("id", campaignId)
-      .single();
-    campaign = (camp as Campaign) ?? null;
-    // Treat archived campaigns as missing for claim flow (will show "This campaign has ended.")
-  }
-
-  return { token: tokenData, campaign };
 }
 
 export default async function ClaimPage({

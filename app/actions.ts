@@ -67,7 +67,7 @@ export async function resetDemo(orgId?: string | null) {
   }
 }
 
-const UUID_REGEX = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 /** Normalize claim token ID from URL: decode, strip junk, extract UUID if present. */
 function normalizeClaimTokenId(raw: string): string {
@@ -83,6 +83,11 @@ function normalizeClaimTokenId(raw: string): string {
   return s
 }
 
+/** Strict UUID validation - returns true only if the string is exactly a valid UUID. */
+function isValidUUID(id: string): boolean {
+  return UUID_REGEX.test(id)
+}
+
 /** Load token + campaign for claim page. Uses service role. Returns full token (including status) and campaign (including deleted_at). Never throws – returns null on any error. */
 export async function getTokenForClaim(tokenId: string) {
   if (!hasServiceRoleKey()) {
@@ -93,6 +98,12 @@ export async function getTokenForClaim(tokenId: string) {
     const supabase = getSupabaseService()
     const id = normalizeClaimTokenId(tokenId)
     if (!id) return null
+
+    // Strict UUID validation - must match exactly before querying Supabase
+    if (!isValidUUID(id)) {
+      console.error('[claim] getTokenForClaim: Invalid UUID format:', id)
+      return null
+    }
 
     const { data: token, error: tokenErr } = await supabase
       .from('tokens')
@@ -121,12 +132,23 @@ export async function getTokenForClaim(tokenId: string) {
     const campaignId = t.campaign_id ?? null
     let campaign: unknown = null
     if (campaignId) {
-      const { data: camp } = await supabase
-        .from('campaigns')
-        .select('*')
-        .eq('id', campaignId)
-        .single()
-      campaign = camp
+      try {
+        const { data: camp, error: campError } = await supabase
+          .from('campaigns')
+          .select('*')
+          .eq('id', campaignId)
+          .single()
+        
+        if (campError) {
+          console.warn('getTokenForClaim campaign fetch error:', campError.code, campError.message)
+          // Continue without campaign
+        } else {
+          campaign = camp
+        }
+      } catch (err) {
+        console.error('getTokenForClaim campaign fetch exception:', err)
+        // Continue without campaign
+      }
     }
 
     return { token: fullToken, campaign }
@@ -154,6 +176,18 @@ export async function submitClaim(input: SubmitClaimInput) {
 
     if (!tokenId) {
       return { success: false, error: 'Token ID is missing.' }
+    }
+
+    // Strict UUID validation - must match exactly before querying Supabase
+    if (!isValidUUID(tokenId)) {
+      console.error('[claim] submitClaim: Invalid UUID format:', tokenId)
+      return { success: false, error: 'Invalid token ID format.' }
+    }
+
+    // Validate campaignId if provided
+    if (campaignId && !isValidUUID(campaignId)) {
+      console.error('[claim] submitClaim: Invalid campaign UUID format:', campaignId)
+      return { success: false, error: 'Invalid campaign ID format.' }
     }
 
     const { data: token, error: tokenErr } = await supabase
