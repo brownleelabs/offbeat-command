@@ -68,15 +68,22 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
   const tapOpenedAt = useMemo(() => new Date().toISOString(), []);
 
   async function handleSubmit(e: React.FormEvent) {
-    // LOG: Rocket log at the VERY BEGINNING to verify click is registered
+    // LOG: Rocket log at the ABSOLUTE BEGINNING - first statement to verify click is registered
     console.log('[ClaimForm] 🚀 Calling submitClaim server action:', {
       tokenId: tokenId.slice(0, 8) + '...',
       campaignId: campaign?.id ? campaign.id.slice(0, 8) + '...' : 'null',
       studentEmail,
       timestamp: new Date().toISOString(),
-    })
+    });
 
     e.preventDefault();
+    
+    // Guard: Prevent double submission
+    if (status === "submitting" || status === "success") {
+      console.warn('[ClaimForm] ⚠️ Form submission blocked - already submitting or completed');
+      return;
+    }
+
     setStatus("submitting");
     setSubmitPhase("location");
     setErrorMsg("");
@@ -167,7 +174,7 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         Enter your details for payout. All fields are required.
       </p>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form id="claim-form" onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label htmlFor="claim-first-name" className="mb-1 block text-xs text-muted-foreground">
             {CAMPAIGN_REQUIRED_FIELDS.find((f) => f.key === "first_name")?.label}
@@ -269,6 +276,7 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
           Location Access Required for Reward
         </p>
         <button
+          id="claim-submit-button"
           type="submit"
           disabled={status === "submitting"}
           className="mt-3 w-full rounded bg-primary py-3 font-bold text-primary-foreground disabled:opacity-50"
