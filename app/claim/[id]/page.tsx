@@ -13,7 +13,9 @@ function normalizeClaimId(raw: string): string {
     // leave as-is if decoding fails
   }
   s = s.replace(/%20/g, "").replace(/\s+/g, " ").trim();
-  const match = s.match(UUID_REGEX);
+  // Extract UUID pattern (without anchors for extraction, but validate with anchors later)
+  const uuidPattern = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/i;
+  const match = s.match(uuidPattern);
   if (match) return match[0].toLowerCase();
   return s;
 }

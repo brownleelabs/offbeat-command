@@ -78,7 +78,9 @@ function normalizeClaimTokenId(raw: string): string {
     // leave as-is if decoding fails
   }
   s = s.replace(/%20/g, '').replace(/\s+/g, ' ').trim()
-  const uuidMatch = s.match(UUID_REGEX)
+  // Extract UUID pattern (without anchors for extraction, but validate with anchors later)
+  const uuidPattern = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/i
+  const uuidMatch = s.match(uuidPattern)
   if (uuidMatch) return uuidMatch[0].toLowerCase()
   return s
 }
@@ -192,7 +194,7 @@ export async function submitClaim(input: SubmitClaimInput) {
 
     const { data: token, error: tokenErr } = await supabase
       .from('tokens')
-      .select('id, organization_id')
+      .select('id, organization_id, status')
       .eq('id', tokenId)
       .maybeSingle()
 
@@ -202,6 +204,11 @@ export async function submitClaim(input: SubmitClaimInput) {
     }
     if (!token) {
       return { success: false, error: 'Token not found.' }
+    }
+
+    // Check if token is already claimed
+    if ((token as { status?: string }).status === 'found') {
+      return { success: false, error: 'This token has already been claimed.' }
     }
 
     const orgId = (token as { organization_id?: string | null }).organization_id ?? null
