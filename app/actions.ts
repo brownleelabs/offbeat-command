@@ -121,7 +121,7 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
   // LOG: Confirm function is being called
   console.log('[submitClaim] 🚀 Function invoked:', {
     tokenId: input.tokenId?.slice(0, 8) + '...',
-    campaignId: input.campaignId?.slice(0, 8) + '...' ?? 'null',
+    campaignId: input.campaignId ? input.campaignId.slice(0, 8) + '...' : 'null',
     studentEmail: input.studentEmail,
     timestamp: new Date().toISOString(),
   })
