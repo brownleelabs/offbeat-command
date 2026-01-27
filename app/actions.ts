@@ -22,13 +22,13 @@ function getSupabaseAnon() {
   return createClient(url, key)
 }
 
-/** Service-role client (bypasses RLS). Use only for trusted server-only flows (e.g. anonymous claim). */
+/** Service-role client (bypasses RLS). Use only for trusted server-only flows (e.g. anonymous claim). Returns null if env vars missing. */
 function getSupabaseService() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!url || !key) {
-    console.error('[claim] SUPABASE_SERVICE_ROLE_KEY is missing. Add it to .env.local and restart.')
-    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY for claim flow")
+    console.error('[getSupabaseService] Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
+    return null
   }
   return createClient(url, key)
 }
@@ -120,13 +120,20 @@ export async function getTokenForClaim(tokenId: string) {
     return null
   }
   try {
-    const supabase = getSupabaseService()
+    // SAFETY 1: Normalize ID first
     const id = normalizeClaimTokenId(tokenId)
     if (!id) return null
 
-    // Strict UUID validation - must match exactly before querying Supabase
-    if (!isValidUUID(id)) {
-      console.error('[claim] getTokenForClaim: Invalid UUID format:', id)
+    // SAFETY 2: Strict UUID validation BEFORE any database calls
+    if (!UUID_REGEX.test(id)) {
+      console.warn('[claim] getTokenForClaim: Invalid UUID format:', id)
+      return null
+    }
+
+    // SAFETY 3: Initialize Supabase client (now safe - validation done)
+    const supabase = getSupabaseService()
+    if (!supabase) {
+      console.error('[claim] getTokenForClaim: Failed to initialize Supabase service client')
       return null
     }
 
@@ -158,21 +165,22 @@ export async function getTokenForClaim(tokenId: string) {
     let campaign: unknown = null
     if (campaignId) {
       try {
+        // Use maybeSingle() instead of single() to prevent exceptions when campaign not found
         const { data: camp, error: campError } = await supabase
           .from('campaigns')
           .select('*')
           .eq('id', campaignId)
-          .single()
+          .maybeSingle()
         
         if (campError) {
           console.warn('getTokenForClaim campaign fetch error:', campError.code, campError.message)
-          // Continue without campaign
-        } else {
+          // Continue without campaign - token is still valid
+        } else if (camp) {
           campaign = camp
         }
       } catch (err) {
-        console.error('getTokenForClaim campaign fetch exception:', err)
-        // Continue without campaign
+        console.warn('getTokenForClaim campaign fetch exception (non-fatal):', err)
+        // Continue without campaign - token is still valid
       }
     }
 
@@ -195,21 +203,29 @@ export async function submitClaim(input: SubmitClaimInput) {
     return { success: false, error: 'Something went wrong. Please try again later.' }
   }
   try {
-    const supabase = getSupabaseService()
+    // SAFETY 1: Normalize and validate tokenId BEFORE any database calls
     const tokenId = normalizeClaimTokenId(input.tokenId)
-    const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
-
-    // SAFETY: Fail fast if ID is bad
-    if (!tokenId || !isValidUUID(tokenId)) {
+    
+    // SAFETY 2: Fail fast - strict UUID validation before touching Supabase
+    if (!tokenId || !UUID_REGEX.test(tokenId)) {
+      console.warn('[claim] submitClaim: Invalid token UUID format:', tokenId)
       return { success: false, error: 'Invalid Token ID format.' }
     }
 
-    // Validate campaignId if provided
-    if (campaignId && !isValidUUID(campaignId)) {
+    // SAFETY 3: Validate campaignId format if provided (before DB calls)
+    const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
+    if (campaignId && !UUID_REGEX.test(campaignId)) {
       console.error('[claim] submitClaim: Invalid campaign UUID format:', campaignId)
       return { success: false, error: 'Invalid campaign ID format.' }
     }
 
+    // SAFETY 4: Initialize Supabase client (now safe - validation done)
+    const supabase = getSupabaseService()
+    if (!supabase) {
+      return { success: false, error: 'Server configuration error.' }
+    }
+
+    // Query tokens table (tokenId already validated above)
     const { data: token, error: tokenErr } = await supabase
       .from('tokens')
       .select('id, organization_id, status, campaign_id')
@@ -359,6 +375,10 @@ export async function bulkAssignTokensToSchool(
     }
 
     const supabase = getSupabaseService()
+    if (!supabase) {
+      return { success: false, error: 'Server configuration error.' }
+    }
+
     const ids = tokenIds.filter((id) => typeof id === 'string' && id.length > 0)
     if (ids.length === 0) return { success: false, error: 'No valid token IDs.' }
 
@@ -430,6 +450,11 @@ export async function setRolePermission(
     }
 
     const supabase = getSupabaseService()
+    if (!supabase) {
+      return { success: false, error: 'Server configuration error.' }
+    }
+
+    // TypeScript: supabase is guaranteed non-null after check above
     const { error } = await supabase
       .from('role_permissions')
       .upsert({ role, permission_key: permissionKey, enabled, updated_at: new Date().toISOString() }, {

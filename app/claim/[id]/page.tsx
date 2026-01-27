@@ -46,28 +46,30 @@ function getSupabaseAdmin() {
 async function getTokenForClaim(
   id: string
 ): Promise<{ token: Token; campaign: Campaign | null } | null> {
-  // SAFETY 1: Validate ID format before touching DB
-  if (!isValidUUID(id)) {
+  // SAFETY 1: Fail Fast - Strict UUID validation before ANY database call
+  if (!UUID_REGEX.test(id)) {
     console.warn(`⚠️ [Claim] Invalid UUID format: ${id}`);
     return null;
   }
 
+  // SAFETY 2: Initialize Supabase client (no DB call yet)
   const supabaseAdmin = getSupabaseAdmin();
   if (!supabaseAdmin) {
     console.error("❌ [Claim] Service Role Client failed to initialize.");
     return null;
   }
 
+  // SAFETY 3: Crash Protection - Wrap ALL database operations in try/catch
   try {
-    // SAFETY 2: Wrap DB call in try/catch to prevent 500s
-    const { data: token, error } = await supabaseAdmin
+    // Query tokens table
+    const { data: token, error: tokenError } = await supabaseAdmin
       .from("tokens")
       .select("id, lat, lng, status, organization_id, campaign_id")
       .eq("id", id)
       .maybeSingle();
 
-    if (error) {
-      console.error("❌ [Claim] DB Error:", error.message);
+    if (tokenError) {
+      console.error("❌ [Claim] Token query error:", tokenError.message);
       return null;
     }
 
@@ -76,6 +78,7 @@ async function getTokenForClaim(
       return null;
     }
 
+    // Map token data safely
     const tokenData: Token = {
       id: token.id,
       lat: Number(token.lat) || 0,
@@ -84,26 +87,35 @@ async function getTokenForClaim(
       organization_id: token.organization_id ?? null,
     };
 
+    // Fetch campaign if token has one (also wrapped in try/catch for safety)
     const campaignId = token.campaign_id ?? null;
     let campaign: Campaign | null = null;
 
     if (campaignId) {
-      // Fetch campaign safely
-      const { data: camp, error: campError } = await supabaseAdmin
-        .from("campaigns")
-        .select("*")
-        .eq("id", campaignId)
-        .single();
+      try {
+        const { data: camp, error: campError } = await supabaseAdmin
+          .from("campaigns")
+          .select("*")
+          .eq("id", campaignId)
+          .maybeSingle(); // Use maybeSingle() instead of single() to avoid throwing
 
-      if (!campError && camp) {
-        campaign = camp as Campaign;
+        if (!campError && camp) {
+          campaign = camp as Campaign;
+        } else if (campError) {
+          console.warn("⚠️ [Claim] Campaign fetch error (non-fatal):", campError.message);
+          // Continue without campaign - token is still valid
+        }
+      } catch (campErr) {
+        console.warn("⚠️ [Claim] Campaign fetch exception (non-fatal):", campErr);
+        // Continue without campaign - token is still valid
       }
     }
 
     return { token: tokenData, campaign };
   } catch (err) {
+    // Catch ANY exception from database operations
     console.error("🔥 [Claim] CRITICAL DB EXCEPTION:", err);
-    return null; // Return null instead of crashing the page
+    return null; // Return null instead of crashing - NEVER throw
   }
 }
 
