@@ -80,3 +80,17 @@ export interface UserProfile {
   role: UserRole;
   organization_id: string | null;
 }
+
+/** Deal scenario stored in deal_scenarios table. */
+export interface DealScenario {
+  id: string;
+  name: string;
+  target_students: number;
+  redemption_velocity: number;
+  assumed_yield_rate: number; // Stored as percentage (e.g., 3.0 for 3.0%)
+  tdv_amount: number;
+  annual_student_welfare: number;
+  annual_operator_revenue: number;
+  annual_principal_protection: number;
+  created_at?: string;
+}

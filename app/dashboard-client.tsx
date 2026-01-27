@@ -19,14 +19,15 @@ import {
   getRolePermissions,
   setRolePermission,
 } from "@/app/actions";
-import type { Campaign, TokenWithCampaign } from "@/types";
+import type { Campaign, TokenWithCampaign, DealScenario } from "@/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CampaignQuestion } from "@/types";
 import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
 
 /** Campus/tenant entity. In the DB: table `organizations`. Public-facing UI uses "school" (e.g. /schools); Command Center uses "organization". */
 type Organization = { id: string; name: string };
 
-type Tab = "map" | "fleet" | "campaigns" | "settings";
+type Tab = "map" | "fleet" | "campaigns" | "settings" | "pricing";
 
 /** Effective write flags for current user. SUPER_ADMIN = all true; else from role_permissions. */
 function getEffectivePermissions(
@@ -80,7 +81,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab === "map" || tab === "fleet" || tab === "campaigns" || tab === "settings") setActiveTab(tab);
+    if (tab === "map" || tab === "fleet" || tab === "campaigns" || tab === "settings" || tab === "pricing") setActiveTab(tab);
   }, [searchParams]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [tokens, setTokens] = useState<TokenWithCampaign[]>([]);
@@ -459,14 +460,24 @@ export default function AdminDashboard() {
             CAMPAIGNS
           </button>
           {userRole === "SUPER_ADMIN" && (
-            <button
-              onClick={() => setActiveTab("settings")}
-              className={`rounded-md px-6 py-2 transition ${
-                activeTab === "settings" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              SETTINGS
-            </button>
+            <>
+              <button
+                onClick={() => setActiveTab("pricing")}
+                className={`rounded-md px-6 py-2 transition ${
+                  activeTab === "pricing" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                PRICING
+              </button>
+              <button
+                onClick={() => setActiveTab("settings")}
+                className={`rounded-md px-6 py-2 transition ${
+                  activeTab === "settings" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                SETTINGS
+              </button>
+            </>
           )}
         </div>
         <div className="flex w-32 items-center justify-end gap-4 font-mono text-xs uppercase text-muted-foreground">
@@ -529,6 +540,10 @@ export default function AdminDashboard() {
             showArchivedCampaigns={showArchivedCampaigns}
             setShowArchivedCampaigns={setShowArchivedCampaigns}
           />
+        )}
+
+        {activeTab === "pricing" && userRole === "SUPER_ADMIN" && (
+          <PricingTab supabase={supabase} />
         )}
 
         {activeTab === "settings" && userRole === "SUPER_ADMIN" && (
@@ -682,7 +697,7 @@ function SystemStatus() {
   const pulseClass = zone.pulse ? "animate-pulse" : "";
 
   return (
-    <div className="flex items-center justify-between border-b border-white/5 bg-slate-900/40 px-6 py-2 backdrop-blur-sm">
+    <div className="relative z-10 flex items-center justify-between border-b border-white/5 bg-slate-900/40 px-6 py-2 backdrop-blur-sm">
       <div className="relative">
         <div
           className="flex items-center gap-2 text-xs font-mono cursor-help"
@@ -695,7 +710,7 @@ function SystemStatus() {
           </span>
         </div>
         {showTooltip && (
-          <div className="absolute left-0 top-6 z-50 w-80 rounded-lg border border-white/10 bg-slate-900 p-3 text-xs shadow-xl backdrop-blur-sm">
+          <div className="absolute left-0 top-6 z-[100] w-80 rounded-lg border border-white/10 bg-slate-900 p-3 text-xs shadow-xl backdrop-blur-sm">
             <div className="font-mono font-semibold text-white">
               Zone {zone.id}: {zone.name}
             </div>
@@ -1420,6 +1435,408 @@ function SettingsTab({
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Calculate Total Deal Value (TDV) using the OYE formula.
+ * Formula: TDV = (S * (R_pm * 9) * 25) / (0.567 * r_deal)
+ * 
+ * @param targetStudents - S: Target number of student participants
+ * @param redemptionVelocity - R_pm: Target tokens per student/month (e.g., 0.5)
+ * @param assumedYieldRate - r_deal: Assumed yield rate as percentage (e.g., 3.0 for 3.0%)
+ * @returns TDV in dollars
+ */
+function calculateTDV(
+  targetStudents: number,
+  redemptionVelocity: number,
+  assumedYieldRate: number
+): number {
+  const K_EFF = 0.567; // Efficiency constant
+  const TIME_MULTIPLIER = 9; // Academic year (Sept-May)
+  const TOKEN_VALUE = 25; // $25 per token
+  
+  // Convert yield rate from percentage to decimal (3.0% -> 0.03)
+  const rDealDecimal = assumedYieldRate / 100;
+  
+  const numerator = targetStudents * (redemptionVelocity * TIME_MULTIPLIER) * TOKEN_VALUE;
+  const denominator = K_EFF * rDealDecimal;
+  
+  return numerator / denominator;
+}
+
+/**
+ * Calculate annual distributions from TDV and yield rate.
+ */
+function calculateDistributions(tdv: number, yieldRatePercent: number) {
+  const yieldRateDecimal = yieldRatePercent / 100;
+  const annualYield = tdv * yieldRateDecimal;
+  
+  return {
+    studentWelfare: annualYield * 0.63, // 63% to students
+    operatorRevenue: annualYield * 0.12, // 12% to operator
+    principalProtection: annualYield * 0.25, // 25% to principal
+  };
+}
+
+/**
+ * Calculate value-led KPIs for deal closing.
+ */
+function calculateValueKPIs(tdv: number, yieldRatePercent: number) {
+  const yieldRateDecimal = yieldRatePercent / 100;
+  
+  // Mission Output (Annual) = TDV * Yield * 0.63
+  const missionOutput = tdv * yieldRateDecimal * 0.63;
+  
+  // Value Return Horizon = 1 / (Yield * 0.63) in years
+  const paybackYears = 1 / (yieldRateDecimal * 0.63);
+  
+  // Principal Growth Projection (10-Year) = TDV * (1 + (Yield * 0.25))^10
+  const principalGrowthRate = yieldRateDecimal * 0.25;
+  const tenYearFV = tdv * Math.pow(1 + principalGrowthRate, 10);
+  
+  // Monthly tokens generated = Annual Mission Output / 9 months / $25 per token
+  const monthlyTokens = missionOutput / 9 / 25;
+  
+  return {
+    missionOutput,
+    paybackYears,
+    tenYearFV,
+    monthlyTokens,
+  };
+}
+
+function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
+  const [name, setName] = useState("");
+  const [targetStudents, setTargetStudents] = useState(1000);
+  const [redemptionVelocity, setRedemptionVelocity] = useState(0.5);
+  const [assumedYieldRate, setAssumedYieldRate] = useState(3.0);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [scenarios, setScenarios] = useState<DealScenario[]>([]);
+  const [loadingScenarios, setLoadingScenarios] = useState(false);
+
+  // Calculate TDV and value-led KPIs in real-time
+  const tdv = calculateTDV(targetStudents, redemptionVelocity, assumedYieldRate);
+  const distributions = calculateDistributions(tdv, assumedYieldRate);
+  const valueKPIs = calculateValueKPIs(tdv, assumedYieldRate);
+
+  // Load saved scenarios
+  useEffect(() => {
+    setLoadingScenarios(true);
+    supabase
+      .from("deal_scenarios")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("[Pricing] Error loading scenarios:", error);
+        } else {
+          setScenarios((data as DealScenario[]) ?? []);
+        }
+        setLoadingScenarios(false);
+      });
+  }, [supabase]);
+
+  async function handleSave() {
+    if (!name.trim()) {
+      setSaveError("Please enter a deal name.");
+      return;
+    }
+    setSaveError("");
+    setSaving(true);
+
+    const { error } = await supabase.from("deal_scenarios").insert({
+      name: name.trim(),
+      target_students: targetStudents,
+      redemption_velocity: redemptionVelocity,
+      assumed_yield_rate: assumedYieldRate,
+      tdv_amount: tdv,
+      annual_student_welfare: distributions.studentWelfare,
+      annual_operator_revenue: distributions.operatorRevenue,
+      annual_principal_protection: distributions.principalProtection,
+    });
+
+    setSaving(false);
+    if (error) {
+      setSaveError(error.message);
+    } else {
+      setName("");
+      setTargetStudents(1000);
+      setRedemptionVelocity(0.5);
+      setAssumedYieldRate(3.0);
+      // Reload scenarios
+      const { data } = await supabase
+        .from("deal_scenarios")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (data) setScenarios((data as DealScenario[]) ?? []);
+    }
+  }
+
+  function loadScenario(scenario: DealScenario) {
+    setName(scenario.name);
+    setTargetStudents(scenario.target_students);
+    setRedemptionVelocity(scenario.redemption_velocity);
+    setAssumedYieldRate(scenario.assumed_yield_rate);
+  }
+
+  return (
+    <div className="mx-auto max-w-[98vw] px-4 py-8 font-sans">
+      <h2 className="mb-6 text-2xl font-bold">Deal Sizing Calculator</h2>
+
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+        {/* Left Column: Input Form */}
+        <div className="space-y-6">
+          <div className="rounded-xl border border-white/10 bg-slate-900/50 p-6 backdrop-blur-sm">
+            <h3 className="mb-4 text-lg font-semibold">Deal Parameters</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm text-muted-foreground">
+                  Institution / Opportunity Name
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setSaveError("");
+                  }}
+                  placeholder="e.g., State University Pilot"
+                  className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
+                  Campus Impact Scale (S)
+                  <span
+                    className="cursor-help text-xs text-slate-500"
+                    title="Number of students eligible for the pilot"
+                  >
+                    ⓘ
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  value={targetStudents}
+                  onChange={(e) => setTargetStudents(Number(e.target.value) || 0)}
+                  min="1"
+                  step="1"
+                  className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm font-mono focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
+                  Utilization Intensity (R<sub>pm</sub>)
+                  <span
+                    className="cursor-help text-xs text-slate-500"
+                    title="Projected tokens redeemed per student per month"
+                  >
+                    ⓘ
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  value={redemptionVelocity}
+                  onChange={(e) => setRedemptionVelocity(Number(e.target.value) || 0)}
+                  min="0"
+                  step="0.1"
+                  className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm font-mono focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
+                  Market Yield Environment (r<sub>deal</sub>)
+                  <span
+                    className="cursor-help text-xs text-slate-500"
+                    title="Benchmark interest rate, e.g., 3.0% for Standard"
+                  >
+                    ⓘ
+                  </span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={assumedYieldRate}
+                    onChange={(e) => setAssumedYieldRate(Number(e.target.value) || 0)}
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    className="h-10 flex-1 rounded border border-border bg-black/20 px-3 text-sm font-mono focus:ring-2 focus:ring-primary/20"
+                  />
+                  <span className="text-sm text-muted-foreground">%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {saveError && (
+            <div className="rounded-lg border border-red-500/50 bg-red-950/30 p-3 text-sm text-red-400">
+              {saveError}
+            </div>
+          )}
+
+          <button
+            onClick={handleSave}
+            disabled={saving || !name.trim()}
+            className="h-11 w-full rounded bg-primary px-6 text-base font-semibold text-primary-foreground shadow-lg shadow-blue-500/20 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save Scenario"}
+          </button>
+        </div>
+
+        {/* Right Column: Killer Metrics */}
+        <div className="space-y-6">
+          <div className="rounded-xl border border-white/10 bg-slate-900/50 p-6 backdrop-blur-sm">
+            <h3 className="mb-4 text-lg font-semibold">Key Performance Indicators</h3>
+            <div className="space-y-4">
+              {/* Endowment Capital */}
+              <div className="rounded-lg border border-blue-500/20 bg-blue-950/30 p-4">
+                <div className="mb-1 text-xs font-medium uppercase tracking-wider text-blue-400">
+                  Endowment Capital Required
+                </div>
+                <div className="font-mono text-2xl font-bold text-blue-400">
+                  ${tdv.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </div>
+              </div>
+
+              {/* Mission Output */}
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-950/30 p-4">
+                <div className="mb-1 text-xs font-medium uppercase tracking-wider text-emerald-400">
+                  Mission Output (Annual)
+                </div>
+                <div className="font-mono text-xl font-bold text-emerald-400">
+                  ${valueKPIs.missionOutput.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">Annual student value delivered</div>
+              </div>
+
+              {/* Value Return Horizon */}
+              <div className="rounded-lg border border-white/5 bg-black/20 p-4">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Value Return Horizon
+                  </span>
+                  {valueKPIs.paybackYears < 25 && (
+                    <span className="rounded bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                      High Efficiency
+                    </span>
+                  )}
+                </div>
+                <div className="font-mono text-xl font-bold text-white">
+                  {valueKPIs.paybackYears.toFixed(1)} Years
+                </div>
+                <div className="mt-1 text-xs text-slate-500">Years to 100% Value Recoup</div>
+              </div>
+
+              {/* Principal Growth Projection */}
+              <div className="rounded-lg border border-amber-500/20 bg-amber-950/30 p-4">
+                <div className="mb-1 text-xs font-medium uppercase tracking-wider text-amber-400">
+                  Principal Growth Projection (10-Year)
+                </div>
+                <div className="font-mono text-xl font-bold text-amber-400">
+                  ${valueKPIs.tenYearFV.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">Projected principal value after 10 years</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Dynamic Closing Statement */}
+      <div className="mt-12 rounded-xl border border-emerald-500/20 bg-emerald-950/30 p-6 backdrop-blur-sm">
+        <h3 className="mb-4 text-lg font-semibold text-emerald-400">Executive Summary</h3>
+        <div className="space-y-3 text-sm leading-relaxed text-slate-300">
+          <p>
+            To sustain a{" "}
+            <span className="font-mono font-semibold text-emerald-400">
+              {redemptionVelocity.toFixed(1)} tokens/month
+            </span>{" "}
+            pilot for{" "}
+            <span className="font-mono font-semibold text-emerald-400">
+              {targetStudents.toLocaleString()} students
+            </span>
+            , {name.trim() || "the institution"} requires an endowment of{" "}
+            <span className="font-mono font-semibold text-blue-400">
+              ${tdv.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+            </span>
+            .
+          </p>
+          <p>
+            At a{" "}
+            <span className="font-mono font-semibold text-emerald-400">
+              {assumedYieldRate.toFixed(1)}%
+            </span>{" "}
+            market rate, this capital engine will generate approximately{" "}
+            <span className="font-mono font-semibold text-emerald-400">
+              {valueKPIs.monthlyTokens.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+            </span>{" "}
+            tokens ($25/ea) every month during the academic year.
+          </p>
+          <div className="mt-4 border-t border-emerald-500/20 pt-4">
+            <p className="font-semibold text-emerald-400">The Bottom Line:</p>
+            <p className="mt-2">
+              This structure delivers{" "}
+              <span className="font-mono font-semibold text-emerald-400">
+                ${valueKPIs.missionOutput.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+              </span>{" "}
+              in annual student value. In{" "}
+              <span className="font-mono font-semibold text-emerald-400">
+                {valueKPIs.paybackYears.toFixed(1)}
+              </span>{" "}
+              years, the system will have distributed 100% of the initial capital value back to
+              students, while the principal base is projected to grow to{" "}
+              <span className="font-mono font-semibold text-emerald-400">
+                ${valueKPIs.tenYearFV.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+              </span>{" "}
+              via the 25% protection mechanism.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Saved Scenarios List */}
+      <div className="mt-12">
+        <h3 className="mb-4 text-lg font-semibold">Saved Scenarios</h3>
+        {loadingScenarios ? (
+          <div className="text-sm text-muted-foreground">Loading...</div>
+        ) : scenarios.length === 0 ? (
+          <div className="rounded-lg border border-white/10 bg-slate-900/50 p-8 text-center">
+            <p className="text-sm text-muted-foreground">No saved scenarios yet.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {scenarios.map((scenario) => (
+              <div
+                key={scenario.id}
+                className="group cursor-pointer rounded-lg border border-white/10 bg-slate-900/50 p-4 transition hover:bg-white/5"
+                onClick={() => loadScenario(scenario)}
+              >
+                <div className="mb-2 font-semibold">{scenario.name}</div>
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <div className="font-mono">
+                    TDV: ${scenario.tdv_amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                  </div>
+                  <div>
+                    {scenario.target_students.toLocaleString()} students @ {scenario.redemption_velocity} tokens/mo
+                  </div>
+                  <div>Yield: {scenario.assumed_yield_rate}%</div>
+                  {scenario.created_at && (
+                    <div className="mt-2 text-slate-600">
+                      {new Date(scenario.created_at).toLocaleDateString()}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
