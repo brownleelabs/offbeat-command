@@ -3,14 +3,24 @@
 import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabase } from '@/lib/supabase-server'
-// Import the constants from the new file
-import { ROLE_PERMISSION_KEYS, CONTROLLABLE_ROLES, type RolePermissionKey, type RolePermissionRow } from '@/lib/constants'
+import {
+  type BulkAssignToSchoolResult,
+  type SubmitClaimInput,
+  type SubmitClaimResult,
+} from '@/lib/actions-constants'
+import {
+  CONTROLLABLE_ROLES,
+  ROLE_PERMISSION_KEYS,
+  type RolePermissionKey,
+  type RolePermissionRow,
+} from '@/lib/constants'
 
 // 1. STRICT VALIDATION & HELPERS
-const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const UUID_REGEX =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function isValidUUID(id: string): boolean {
-  return UUID_REGEX.test(id);
+  return UUID_REGEX.test(id)
 }
 
 function normalizeClaimTokenId(raw: string): string {
@@ -25,7 +35,10 @@ function normalizeClaimTokenId(raw: string): string {
 function getSupabaseAnon() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !key) throw new Error("Missing Supabase API Keys on Server")
+  if (!url || !key) {
+    console.error('[getSupabaseAnon] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY')
+    return null
+  }
   return createClient(url, key)
 }
 
@@ -34,7 +47,10 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 function getSupabaseService() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = SERVICE_ROLE_KEY
-  if (!url || !key) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY")
+  if (!url || !key) {
+    console.error('[getSupabaseService] Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
+    return null
+  }
   return createClient(url, key)
 }
 
@@ -44,138 +60,194 @@ function hasServiceRoleKey(): boolean {
 
 // 2. CORE ACTIONS
 
-export async function claimToken(id: string) {
-  const supabase = getSupabaseAnon()
-  const { data, error } = await supabase
-    .from('tokens')
-    .update({ status: 'found' })
-    .eq('id', id)
-    .select()
-  if (error) throw new Error(error.message)
-  if (!data?.length) throw new Error("Token ID not found")
-  return { success: true }
+export async function claimToken(
+  id: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    if (!isValidUUID(id)) return { success: false, error: 'Invalid Token ID format.' }
+
+    const supabase = getSupabaseAnon()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    const { data, error } = await supabase
+      .from('tokens')
+      .update({ status: 'found' })
+      .eq('id', id)
+      .select()
+    if (error) {
+      console.error('[claimToken] DB error:', error.message)
+      return { success: false, error: 'Claim failed.' }
+    }
+    if (!data?.length) return { success: false, error: 'Token ID not found.' }
+    return { success: true }
+  } catch (err) {
+    console.error('[claimToken] Unexpected error:', err)
+    return { success: false, error: 'Claim failed.' }
+  }
 }
 
-export async function resetDemo(orgId?: string | null) {
-  const supabase = await createServerSupabase()
-  let query = supabase.from('tokens').update({ status: 'active' }).neq('status', 'active')
-  if (orgId != null) query = query.eq('organization_id', orgId)
-  const { error } = await query
-  if (error) throw new Error(error?.message ?? 'Reset failed')
+export async function resetDemo(
+  orgId?: string | null
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabase = await createServerSupabase()
+    let query = supabase
+      .from('tokens')
+      .update({ status: 'active' })
+      .neq('status', 'active')
+    if (orgId != null) query = query.eq('organization_id', orgId)
+    const { error } = await query
+    if (error) {
+      console.error('[resetDemo] DB error:', error.message)
+      return { success: false, error: error.message ?? 'Reset failed.' }
+    }
+    return { success: true }
+  } catch (err) {
+    console.error('[resetDemo] Unexpected error:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Reset failed.' }
+  }
 }
 
-export type SubmitClaimInput = {
-  tokenId: string
-  campaignId: string | null
-  firstName: string
-  lastName: string
-  studentId: string
-  studentEmail: string
-  venmoUsername: string
-  customAnswers: { order: number; text: string; answer: string }[]
-  lat?: number | null
-  lng?: number | null
-  claimMetadata?: Record<string, unknown> | null
-}
-
-export type SubmitClaimResult = { success: true } | { success: false; error: string }
+// Types moved to lib/actions-constants.ts
 
 export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
-  if (!hasServiceRoleKey()) return { success: false, error: 'Server configuration error.' }
-  
   try {
-    const supabase = getSupabaseService()
     const tokenId = normalizeClaimTokenId(input.tokenId)
-
-    if (!tokenId || !isValidUUID(tokenId)) {
-      return { success: false, error: 'Invalid Token ID format.' }
-    }
+    // SAFETY: Fail fast before ANY Supabase call
+    if (!tokenId || !isValidUUID(tokenId)) return { success: false, error: 'Invalid Token ID format.' }
+    if (!hasServiceRoleKey()) return { success: false, error: 'Server configuration error.' }
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
 
     const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
 
-    const { data: token, error: tokenErr } = await supabase
-      .from('tokens')
-      .select('id, organization_id')
-      .eq('id', tokenId)
-      .maybeSingle()
-
-    if (tokenErr || !token) return { success: false, error: 'Token not found.' }
-
-    const orgId = (token as { organization_id?: string | null }).organization_id ?? null
-
-    const serverHeaders: Record<string, string> = {}
     try {
-      const h = await headers()
-      const copy = (name: string) => {
-        const v = h.get(name)
-        if (v) serverHeaders[name.replace(/-/g, '_').toLowerCase()] = v
+      const { data: token, error: tokenErr } = await supabase
+        .from('tokens')
+        .select('id, organization_id')
+        .eq('id', tokenId)
+        .maybeSingle()
+
+      if (tokenErr) {
+        console.error('[submitClaim] token lookup error:', tokenErr.message)
+        return { success: false, error: 'Token lookup failed.' }
       }
-      copy('user-agent')
-      copy('x-forwarded-for')
-      copy('x-real-ip')
-    } catch {}
+      if (!token) return { success: false, error: 'Token not found.' }
 
-    const claim_metadata: Record<string, unknown> = {
-      ...(typeof clientMetadata === 'object' ? clientMetadata : {}),
-      _server: serverHeaders,
-      _submitted_at: new Date().toISOString(),
+      const orgId = (token as { organization_id?: string | null }).organization_id ?? null
+
+      const serverHeaders: Record<string, string> = {}
+      try {
+        const h = await headers()
+        const copy = (name: string) => {
+          const v = h.get(name)
+          if (v) serverHeaders[name.replace(/-/g, '_').toLowerCase()] = v
+        }
+        copy('user-agent')
+        copy('x-forwarded-for')
+        copy('x-real-ip')
+      } catch {}
+
+      const claim_metadata: Record<string, unknown> = {
+        ...(typeof clientMetadata === 'object' ? clientMetadata : {}),
+        _server: serverHeaders,
+        _submitted_at: new Date().toISOString(),
+      }
+
+      const { error: insertErr } = await supabase.from('responses').insert({
+        token_id: tokenId,
+        campaign_id: campaignId ?? null,
+        organization_id: orgId,
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        student_id: studentId.trim(),
+        student_email: studentEmail.trim(),
+        venmo_username: venmoUsername.trim(),
+        custom_answers: Array.isArray(customAnswers) ? customAnswers : [],
+        claim_metadata,
+      })
+
+      if (insertErr) {
+        console.error('[submitClaim] response insert error:', insertErr.message)
+        return { success: false, error: 'Could not save response.' }
+      }
+
+      const tokenUpdate: Record<string, unknown> = { status: 'found' }
+      if (lat != null && lng != null) {
+        tokenUpdate.lat = lat
+        tokenUpdate.lng = lng
+      }
+
+      const { error: updateErr } = await supabase
+        .from('tokens')
+        .update(tokenUpdate)
+        .eq('id', tokenId)
+
+      if (updateErr) {
+        console.error('[submitClaim] token update error:', updateErr.message)
+        return { success: false, error: 'Could not update token.' }
+      }
+
+      return { success: true }
+    } catch (err) {
+      console.error('[submitClaim] DB exception:', err)
+      return { success: false, error: 'Something went wrong.' }
     }
-
-    const { error: insertErr } = await supabase.from('responses').insert({
-      token_id: tokenId,
-      campaign_id: campaignId ?? null,
-      organization_id: orgId,
-      first_name: firstName.trim(),
-      last_name: lastName.trim(),
-      student_id: studentId.trim(),
-      student_email: studentEmail.trim(),
-      venmo_username: venmoUsername.trim(),
-      custom_answers: Array.isArray(customAnswers) ? customAnswers : [],
-      claim_metadata,
-    })
-
-    if (insertErr) return { success: false, error: 'Could not save response.' }
-
-    const tokenUpdate: any = { status: 'found' }
-    if (lat != null && lng != null) { tokenUpdate.lat = lat; tokenUpdate.lng = lng; }
-
-    const { error: updateErr } = await supabase.from('tokens').update(tokenUpdate).eq('id', tokenId)
-
-    if (updateErr) return { success: false, error: 'Could not update token.' }
-
-    return { success: true }
   } catch (err) {
-    console.error('submitClaim error:', err)
+    console.error('[submitClaim] Unexpected error:', err)
     return { success: false, error: 'Something went wrong.' }
   }
 }
 
 export async function getTokenForClaim(tokenId: string) {
-  if (!hasServiceRoleKey()) return null
   try {
-    const supabase = getSupabaseService()
     const id = normalizeClaimTokenId(tokenId)
+    // SAFETY: Fail fast before ANY Supabase call
     if (!id || !isValidUUID(id)) return null
+    if (!hasServiceRoleKey()) return null
+    const supabase = getSupabaseService()
+    if (!supabase) return null
 
-    const { data: token } = await supabase.from('tokens').select('id, campaign_id').eq('id', id).maybeSingle()
-    if (!token) return null
+    try {
+      const { data: token, error: tokenErr } = await supabase
+        .from('tokens')
+        .select('id, campaign_id')
+        .eq('id', id)
+        .maybeSingle()
+      if (tokenErr) {
+        console.error('[getTokenForClaim] token lookup error:', tokenErr.message)
+        return null
+      }
+      if (!token) return null
 
-    const campaignId = token.campaign_id
-    let campaign: unknown = null
-    if (campaignId) {
-      const { data: camp } = await supabase.from('campaigns').select('*').eq('id', campaignId).single()
-      campaign = camp
+      const campaignId = token.campaign_id
+      let campaign: unknown = null
+      if (campaignId) {
+        // Use maybeSingle() so missing campaign doesn't throw
+        const { data: camp, error: campErr } = await supabase
+          .from('campaigns')
+          .select('*')
+          .eq('id', campaignId)
+          .maybeSingle()
+        if (campErr) {
+          console.error('[getTokenForClaim] campaign lookup error:', campErr.message)
+          campaign = null
+        } else {
+          campaign = camp ?? null
+        }
+      }
+
+      return { token: { id: token.id, campaign_id: campaignId }, campaign }
+    } catch (err) {
+      console.error('[getTokenForClaim] DB exception:', err)
+      return null
     }
-
-    return { token: { id: token.id, campaign_id: campaignId }, campaign }
   } catch {
     return null
   }
 }
 
 // 3. ADMIN FUNCTIONS
-
-export type BulkAssignToSchoolResult = { success: true; count: number } | { success: false; error: string }
 
 export async function bulkAssignTokensToSchool(
   tokenIds: string[],
@@ -205,6 +277,7 @@ export async function bulkAssignTokensToSchool(
     }
 
     const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
     const ids = tokenIds.filter((id) => typeof id === 'string' && id.length > 0)
     if (ids.length === 0) return { success: false, error: 'No valid token IDs.' }
 
@@ -260,6 +333,7 @@ export async function setRolePermission(
     }
 
     const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
     const { error } = await supabase
       .from('role_permissions')
       .upsert({ role, permission_key: permissionKey, enabled, updated_at: new Date().toISOString() }, {
