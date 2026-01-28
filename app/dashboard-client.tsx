@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Box, ArrowUp, ArrowDown } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
+import { DealDeskContent } from "@/app/deal-desk/page";
 
 const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
 import {
@@ -511,7 +512,7 @@ export default function AdminDashboard() {
                   activeTab === "pricing" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                PRICING
+                DEAL DESK
               </button>
               <button
                 onClick={() => setActiveTab("settings")}
@@ -586,9 +587,7 @@ export default function AdminDashboard() {
           />
         )}
 
-        {activeTab === "pricing" && userRole === "SUPER_ADMIN" && (
-          <PricingTab supabase={supabase} />
-        )}
+        {activeTab === "pricing" && userRole === "SUPER_ADMIN" && <DealDeskContent />}
 
         {activeTab === "settings" && userRole === "SUPER_ADMIN" && (
           <SettingsTab
