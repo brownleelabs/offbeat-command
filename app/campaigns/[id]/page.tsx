@@ -8,6 +8,8 @@ import { useDashboard } from "@/components/dashboard-context";
 import { ArrowLeft, Trash2, Play } from "lucide-react";
 import {
   getCampaign,
+  getCampaignAuditLog,
+  insertCampaign,
   updateCampaign,
   archiveCampaigns,
   softDeleteCampaigns,
@@ -17,6 +19,8 @@ import type { Campaign, CampaignQuestion } from "@/types";
 import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
 
 const MAX_QUESTIONS = 10;
+/** UI shows this many most recent responses; full count/export supports up to 10k per campaign. */
+const RESPONSE_LEDGER_DISPLAY_LIMIT = 200;
 
 type ResponseRow = {
   id: string;
@@ -58,13 +62,19 @@ export default function CampaignDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [responses, setResponses] = useState<ResponseRow[]>([]);
+  const [responseTotal, setResponseTotal] = useState<number | null>(null);
 
   const [name, setName] = useState("");
   const [questions, setQuestions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<Array<{ event_type: string; at: string; actor_user_id: string | null }>>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
   const [assignedTokenCount, setAssignedTokenCount] = useState<number | null>(null);
   const [saveError, setSaveError] = useState<string>("");
 
@@ -142,7 +152,7 @@ export default function CampaignDetailPage() {
           .select("*")
           .eq("campaign_id", id)
           .order("created_at", { ascending: false })
-          .limit(200);
+          .limit(RESPONSE_LEDGER_DISPLAY_LIMIT);
         const orgIdFilter =
           orgId != null &&
           typeof orgId === "string" &&
@@ -159,6 +169,48 @@ export default function CampaignDetailPage() {
         else setResponses(Array.isArray(data) ? (data as ResponseRow[]) : []);
       } catch {
         if (!cancelled) setResponses([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, orgId]);
+
+  // Response totals (exact count; not capped at 200)
+  useEffect(() => {
+    if (!id || !isUuidLike(id)) {
+      setResponseTotal(null);
+      return;
+    }
+    let cancelled = false;
+    const supabase = createClient();
+    (async () => {
+      try {
+        let query = supabase
+          .from("responses")
+          .select("id", { count: "exact", head: true })
+          .eq("campaign_id", id);
+        const orgIdFilter =
+          orgId != null &&
+          typeof orgId === "string" &&
+          orgId.trim().length > 0 &&
+          isUuidLike(orgId.trim())
+            ? orgId.trim()
+            : null;
+        if (orgIdFilter) {
+          query = query.eq("organization_id", orgIdFilter);
+        }
+        const { count, error } = await query;
+        if (cancelled) return;
+        if (error) {
+          setResponseTotal(null);
+          return;
+        }
+        const safeCount =
+          typeof count === "number" && Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+        setResponseTotal(safeCount);
+      } catch {
+        if (!cancelled) setResponseTotal(null);
       }
     })();
     return () => {
@@ -194,8 +246,9 @@ export default function CampaignDetailPage() {
           if (typeof rowId !== "string" || rowId.length === 0) return;
           if (orgIdFilter != null && (row as { organization_id?: string | null }).organization_id !== orgIdFilter) return;
           setResponses((prev) =>
-            (Array.isArray(prev) ? [row as ResponseRow, ...prev] : [row as ResponseRow]).slice(0, 200)
+            (Array.isArray(prev) ? [row as ResponseRow, ...prev] : [row as ResponseRow]).slice(0, RESPONSE_LEDGER_DISPLAY_LIMIT)
           );
+          setResponseTotal((prev) => (typeof prev === "number" ? prev + 1 : prev));
         }
       )
       .subscribe();
@@ -203,6 +256,21 @@ export default function CampaignDetailPage() {
       supabase.removeChannel(channel);
     };
   }, [id, orgId]);
+
+  useEffect(() => {
+    if (!auditOpen || !id || !isUuidLike(id) || !isSuperAdmin) return;
+    let cancelled = false;
+    setAuditLoading(true);
+    getCampaignAuditLog(id, 10).then((res) => {
+      if (cancelled) return;
+      setAuditLoading(false);
+      if (res.success) setAuditEvents(res.events);
+      else setAuditEvents([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [auditOpen, id, isSuperAdmin]);
 
   const addQuestion = () => {
     if (questions.length >= MAX_QUESTIONS) return;
@@ -257,6 +325,53 @@ export default function CampaignDetailPage() {
       setSaveError("Launch failed.");
     } finally {
       setLaunching(false);
+    }
+  }
+
+  async function handleDeactivate() {
+    if (!id || campaign?.status !== "active") return;
+    setDeactivating(true);
+    setSaveError("");
+    try {
+      const res = await updateCampaign(id, { status: "inactive" });
+      if (res.success) {
+        setCampaign((prev) => (prev ? { ...prev, status: "inactive" } : null));
+      } else {
+        setSaveError(res.error ?? "Deactivate failed.");
+      }
+    } catch {
+      setSaveError("Deactivate failed.");
+    } finally {
+      setDeactivating(false);
+    }
+  }
+
+  async function handleDuplicate() {
+    if (!campaign) return;
+    setDuplicating(true);
+    setSaveError("");
+    try {
+      const res = await insertCampaign({
+        name: "Copy of " + (campaign.name ?? "Untitled"),
+        organization_id: campaign.organization_id ?? "",
+        required_fields:
+          Array.isArray(campaign.required_fields) && campaign.required_fields.length > 0
+            ? campaign.required_fields
+            : CAMPAIGN_REQUIRED_FIELDS,
+        questions:
+          Array.isArray(campaign.questions) && campaign.questions.length > 0
+            ? campaign.questions
+            : null,
+      });
+      if (res.success) {
+        router.push("/campaigns/" + res.id);
+      } else {
+        setSaveError(res.error ?? "Duplicate failed.");
+      }
+    } catch {
+      setSaveError("Duplicate failed.");
+    } finally {
+      setDuplicating(false);
     }
   }
 
@@ -409,6 +524,15 @@ export default function CampaignDetailPage() {
                     Created {new Date(campaign.created_at).toLocaleDateString()}
                   </span>
                 )}
+                <span className="text-xs text-muted-foreground">
+                  Responses submitted: {responseTotal != null ? responseTotal : "—"}
+                </span>
+                <span
+                  className="text-xs text-muted-foreground"
+                  title="Coming soon: live payout details via BENJI"
+                >
+                  Paid out: —
+                </span>
               </div>
             </div>
           </div>
@@ -511,6 +635,24 @@ export default function CampaignDetailPage() {
                 {launching ? "Launching…" : "Launch campaign"}
               </button>
             )}
+            {status === "active" && isSuperAdmin && (
+              <button
+                onClick={handleDeactivate}
+                disabled={deactivating}
+                className="rounded border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
+              >
+                {deactivating ? "Deactivating…" : "Deactivate"}
+              </button>
+            )}
+            {isSuperAdmin && !confirmDelete && (
+              <button
+                onClick={handleDuplicate}
+                disabled={duplicating}
+                className="rounded border border-accent px-4 py-2 text-sm text-muted-foreground hover:bg-background/80 disabled:opacity-50"
+              >
+                {duplicating ? "Duplicating…" : "Duplicate"}
+              </button>
+            )}
             {confirmDelete ? (
               <span className="flex flex-wrap items-center gap-2">
                 {assignedTokenCount != null && assignedTokenCount > 0 && (
@@ -544,10 +686,56 @@ export default function CampaignDetailPage() {
           </div>
         </div>
 
+        {isSuperAdmin && (
+          <div className="mt-8 rounded-xl border border-accent bg-muted">
+            <button
+              type="button"
+              onClick={() => setAuditOpen((prev) => !prev)}
+              className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-muted-foreground hover:text-foreground"
+            >
+              Recent activity
+              <span className="text-muted-foreground">{auditOpen ? "−" : "+"}</span>
+            </button>
+            {auditOpen && (
+              <div className="border-t border-accent px-4 py-3">
+                {auditLoading ? (
+                  <p className="text-xs text-muted-foreground">Loading…</p>
+                ) : auditEvents.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No activity yet.</p>
+                ) : (
+                  <ul className="space-y-2 text-xs">
+                    {auditEvents.map((evt, i) => {
+                      const atDate = evt.at ? new Date(evt.at) : null;
+                      const atDisplay =
+                        atDate && !Number.isNaN(atDate.getTime())
+                          ? atDate.toLocaleString()
+                          : "—";
+                      return (
+                        <li key={i} className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                          <span className="font-mono text-foreground">{evt.event_type}</span>
+                          <span>{atDisplay}</span>
+                          {evt.actor_user_id != null && (
+                            <span className="font-mono text-accent">{evt.actor_user_id.slice(0, 8)}…</span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mt-12 border-t border-accent pt-8">
           <h2 className="mb-4 text-xl font-bold uppercase tracking-widest text-primary">
-            Live Response Ledger
+            Response Ledger
           </h2>
+          {responseTotal != null && responseTotal > RESPONSE_LEDGER_DISPLAY_LIMIT && (
+            <p className="mb-2 text-xs text-muted-foreground">
+              Showing most recent {RESPONSE_LEDGER_DISPLAY_LIMIT} of {responseTotal} responses
+            </p>
+          )}
           <p className="mb-4 text-xs text-muted-foreground">
             Each row is a claim; open the link to see full submission and metadata (for payout verification).
           </p>

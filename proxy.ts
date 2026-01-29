@@ -62,8 +62,10 @@ export async function proxy(request: NextRequest) {
       error: authError,
     } = await supabase.auth.getUser();
 
-    // If auth check fails, log detailed error info
-    if (authError) {
+    // If auth check fails, log only when not on login or landing (no session there is expected)
+    const pathname = request.nextUrl.pathname;
+    const isPublicPath = pathname === "/login" || pathname === "/";
+    if (authError && !isPublicPath) {
       console.warn('[proxy] ⚠️ Auth check failed:', {
         message: authError.message,
         name: authError.name,
@@ -72,15 +74,15 @@ export async function proxy(request: NextRequest) {
         hasCookies: allCookies.length > 0,
         supabaseCookieCount: supabaseCookies.length,
       });
-      // If not on login page and auth fails, redirect to login
-      if (request.nextUrl.pathname !== "/login") {
-        return NextResponse.redirect(new URL("/login", request.url));
-      }
+      return NextResponse.redirect(new URL("/login", request.url));
+    }
+    if (authError && isPublicPath) {
       return response;
     }
 
-    // 1. If user is missing and NOT on the login page, kick them to login
-    if (!user && request.nextUrl.pathname !== "/login") {
+    // 1. If user is missing: allow "/" (landing) and "/login"; otherwise kick to login
+    const path = request.nextUrl.pathname;
+    if (!user && path !== "/login" && path !== "/") {
       return NextResponse.redirect(new URL("/login", request.url));
     }
 
@@ -111,8 +113,9 @@ export async function proxy(request: NextRequest) {
       hasUrl: !!url,
       hasAnonKey: !!anonKey,
     });
-    // On error, redirect to login for safety
-    if (request.nextUrl.pathname !== "/login") {
+    // On error, redirect to login for safety (allow "/" and "/login" so landing still works)
+    const pathOnError = request.nextUrl.pathname;
+    if (pathOnError !== "/login" && pathOnError !== "/") {
       return NextResponse.redirect(new URL("/login", request.url));
     }
   }

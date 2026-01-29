@@ -14,12 +14,20 @@ const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
 import {
   ROLE_PERMISSION_KEYS,
   CONTROLLABLE_ROLES,
+  ALL_ROLES,
   type RolePermissionRow,
 } from "@/lib/constants";
 import {
   bulkAssignTokensToSchool,
+  createOrganization,
+  createUserByEmail,
+  deleteOrganization,
   getRolePermissions,
+  listUsers,
+  resetUserPassword,
   setRolePermission,
+  updateUserRole,
+  type ListUserRow,
 } from "@/app/actions";
 import {
   archiveCampaigns,
@@ -36,6 +44,9 @@ import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
 
 /** Campus/tenant entity. In the DB: table `organizations`. Public-facing UI uses "school" (e.g. /schools); Command Center uses "organization". */
 type Organization = { id: string; name: string };
+
+/** Organization with slug and type for Settings tab (list + add). */
+type OrganizationWithType = { id: string; name: string; slug: string | null; type: string };
 
 type Tab = "map" | "fleet" | "campaigns" | "settings" | "pricing";
 
@@ -99,6 +110,7 @@ export default function AdminDashboard() {
   const [selectedTokenIds, setSelectedTokenIds] = useState<Set<string>>(new Set());
   const [targetCampaignId, setTargetCampaignId] = useState("");
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [organizationsForSettings, setOrganizationsForSettings] = useState<OrganizationWithType[]>([]);
   const [targetSchoolId, setTargetSchoolId] = useState("");
   const [assignToSchoolMessage, setAssignToSchoolMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [assignCampaignMessage, setAssignCampaignMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -129,6 +141,21 @@ export default function AdminDashboard() {
       });
     return () => { cancelled = true; };
   }, [userRole]);
+
+  // Fetch all organization types for Settings (school + institution) so "Offbeat Options" and other orgs appear for user/role assignment.
+  const refreshOrganizationsForSettings = useCallback(() => {
+    const client = createClient();
+    client
+      .from("organizations")
+      .select("id, name, slug, type")
+      .in("type", ["school", "institution"])
+      .order("name")
+      .then(({ data }) => setOrganizationsForSettings((data as OrganizationWithType[]) ?? []));
+  }, []);
+  useEffect(() => {
+    if (userRole !== "SUPER_ADMIN") return;
+    refreshOrganizationsForSettings();
+  }, [userRole, refreshOrganizationsForSettings]);
 
   // Fetch organization name when we have orgId and need it for display (ORG_ADMIN). AUDITOR shows "All (read-only)"; SUPER_ADMIN GLOBAL uses view mode label.
   useEffect(() => {
@@ -654,6 +681,8 @@ export default function AdminDashboard() {
 
         {activeTab === "settings" && userRole === "SUPER_ADMIN" && (
           <SettingsTab
+            organizations={organizationsForSettings}
+            onRefreshOrganizations={refreshOrganizationsForSettings}
             rolePermissions={rolePermissions}
             onRefresh={() => getRolePermissions().then(setRolePermissions)}
           />
@@ -1260,8 +1289,18 @@ function CampaignsTab({
   showArchivedCampaigns: boolean;
   setShowArchivedCampaigns: (v: boolean) => void;
 }) {
+  const router = useRouter();
+  const exampleCampaignName = "Student Union Pulse Check";
+  const exampleQuestions = [
+    "What year are you (Freshman / Sophomore / Junior / Senior / Grad)?",
+    "How often do you use the Student Union each week?",
+    "What’s the #1 thing you wish the Student Union had (food, study space, events, services, other)?",
+    "How satisfied are you with campus dining options (1–5)?",
+    "If you could change one thing about student life, what would it be?",
+  ];
+
   const [name, setName] = useState("");
-  const [questions, setQuestions] = useState<string[]>([""]);
+  const [questions, setQuestions] = useState<string[]>(Array.from({ length: 5 }, () => ""));
   const [saving, setSaving] = useState(false);
   const [createOrgId, setCreateOrgId] = useState<string>("");
   const [createError, setCreateError] = useState<string>("");
@@ -1270,7 +1309,10 @@ function CampaignsTab({
   const [listRows, setListRows] = useState<Campaign[]>([]);
   const [campaignTotal, setCampaignTotal] = useState(0);
   const [campaignPage, setCampaignPage] = useState(1);
-  const [campaignPageSize] = useState(50);
+  const [campaignPageSize, setCampaignPageSize] = useState(50);
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState<
+    "all" | "draft" | "active" | "inactive"
+  >("all");
   const [campaignSearchQuery, setCampaignSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [showDeletedCampaigns, setShowDeletedCampaigns] = useState(false);
@@ -1278,7 +1320,9 @@ function CampaignsTab({
   const [loadError, setLoadError] = useState("");
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(new Set());
   const [batchActionError, setBatchActionError] = useState("");
+  const [pinError, setPinError] = useState("");
   const [batchActionLoading, setBatchActionLoading] = useState(false);
+  const [duplicatingCampaignId, setDuplicatingCampaignId] = useState<string | null>(null);
 
   useEffect(() => {
     if (userRole !== "SUPER_ADMIN") return;
@@ -1303,6 +1347,7 @@ function CampaignsTab({
           searchQuery: debouncedSearchQuery,
           showArchived: showArchivedCampaigns,
           showDeleted: showDeletedCampaigns,
+          status: campaignStatusFilter === "all" ? undefined : campaignStatusFilter,
         });
         if (getIsCancelled?.()) return;
         if (!res.success) {
@@ -1341,6 +1386,7 @@ function CampaignsTab({
       userRole,
       campaignPage,
       campaignPageSize,
+      campaignStatusFilter,
       debouncedSearchQuery,
       showArchivedCampaigns,
       showDeletedCampaigns,
@@ -1354,7 +1400,7 @@ function CampaignsTab({
     return () => {
       cancelled = true;
     };
-  }, [userRole, campaignPage, debouncedSearchQuery, showArchivedCampaigns, showDeletedCampaigns, loadCampaignsList]);
+  }, [userRole, campaignPage, debouncedSearchQuery, showArchivedCampaigns, showDeletedCampaigns, campaignStatusFilter, loadCampaignsList]);
 
   const addQuestion = () => {
     if (questions.length >= MAX_QUESTIONS) return;
@@ -1393,7 +1439,7 @@ function CampaignsTab({
       });
       if (res.success) {
         setName("");
-        setQuestions([""]);
+        setQuestions(Array.from({ length: 5 }, () => ""));
         setCreateOrgId("");
         onRefresh();
         if (userRole === "SUPER_ADMIN") loadCampaignsList(1);
@@ -1508,190 +1554,89 @@ function CampaignsTab({
       setBatchActionLoading(false);
     }
   }
+  async function duplicateCampaignFromList(c: Campaign) {
+    if (!c.id || userRole !== "SUPER_ADMIN") return;
+    setPinError("");
+    setDuplicatingCampaignId(c.id);
+    try {
+      const res = await insertCampaign({
+        name: "Copy of " + (c.name ?? "Untitled"),
+        organization_id: c.organization_id ?? "",
+        required_fields: Array.isArray(c.required_fields) && c.required_fields.length > 0 ? c.required_fields : CAMPAIGN_REQUIRED_FIELDS,
+        questions: Array.isArray(c.questions) && c.questions.length > 0 ? c.questions : null,
+      });
+      if (res.success) {
+        onRefresh();
+        loadCampaignsList(1);
+        router.push("/campaigns/" + res.id);
+      } else {
+        setPinError(res.error ?? "Duplicate failed.");
+      }
+    } catch {
+      setPinError("Duplicate failed.");
+    } finally {
+      setDuplicatingCampaignId(null);
+    }
+  }
+
   async function toggleCampaignPinned(c: Campaign) {
     if (!c.id) return;
-    setBatchActionError("");
+    setPinError("");
     const next = !(c.pinned ?? false);
     try {
       const res = await updateCampaignPinned(c.id, next);
-      if (res.success) {
-        loadCampaignsList(campaignPage);
-      } else {
-        setBatchActionError(res.error ?? "Pin update failed.");
+      if (!res.success) {
+        setPinError(res.error ?? "Pin update failed.");
+        return;
       }
-    } catch {
-      setBatchActionError("Pin update failed.");
+      // Optimistic update so the star + "PINNED" pill update immediately (no refetch).
+      setListRows((prev) => prev.map((row) => (row.id === c.id ? { ...row, pinned: next } : row)));
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message : "Pin update failed.");
     }
   }
 
   return (
-    <div className="mx-auto grid max-w-[98vw] grid-cols-1 gap-8 px-4 py-8 font-sans lg:grid-cols-2">
-      {campaignsWrite && (
-      <div className="flex flex-col p-4">
-        <h2 className="mb-6 text-xl font-bold">Create Campaign</h2>
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
-          <fieldset className="space-y-6 lg:col-span-5">
-            <legend className="px-0 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Logistics
-            </legend>
-            {userRole === "SUPER_ADMIN" && orgId === null && (
-              <div className="space-y-2">
-                <label htmlFor="create-campaign-org" className="block text-sm text-muted-foreground">
-                  Organization
-                </label>
-                <select
-                  id="create-campaign-org"
-                  name="createCampaignOrganization"
-                  aria-label="Organization for new campaign"
-                  value={createOrgId}
-                  onChange={(e) => { setCreateOrgId(e.target.value); setCreateError(""); }}
-                  className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
-                >
-                  <option value="">Select organization...</option>
-                  {organizations
-                    .filter((o) => typeof o.id === "string" && o.id.length > 0)
-                    .map((o) => (
-                      <option key={o.id} value={o.id}>{String(o.name ?? "")}</option>
-                    ))}
-                </select>
-                {organizations.length === 0 && (
-                  <p className="text-xs text-amber-500">
-                    No organizations found. Add the <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id, name, slug), add RLS so you can read it, and insert at least one row. See <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
-                  </p>
-                )}
-              </div>
-            )}
-            <div className="space-y-2">
-              <label htmlFor="create-campaign-name" className="block text-sm text-muted-foreground">
-                Campaign name
-              </label>
-              <input
-                id="create-campaign-name"
-                name="createCampaignName"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Austin Q1 Campaign"
-                maxLength={500}
-                className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
-              />
-            </div>
-            <div className="rounded-r-md border-l-2 border-emerald-500 bg-emerald-950/30 p-4 font-mono text-xs text-emerald-400">
-              <h3 className="mb-2 font-semibold uppercase tracking-wider">
-                Required fields (reward payout)
-              </h3>
-              <ul className="space-y-1.5">
-                {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
-                  <li key={f.key} className="flex items-center gap-2">
-                    <span className="text-emerald-400">✓</span>
-                    {f.label}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2 text-muted-foreground">
-                Collected for every response; used for payouts.
-              </p>
-            </div>
-          </fieldset>
-          <div className="space-y-4 lg:col-span-7">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
-                Additional questions (up to {MAX_QUESTIONS})
-              </p>
-              {questions.length < MAX_QUESTIONS && (
-                <button
-                  type="button"
-                  onClick={addQuestion}
-                  className="text-xs text-primary hover:underline"
-                >
-                  + Add
-                </button>
-              )}
-            </div>
-            <div className="space-y-4">
-              {questions.map((q, i) => (
-                <div
-                  key={i}
-                  className="group relative flex gap-2 rounded-md transition-colors hover:bg-white/5"
-                >
-                  <input
-                    id={`create-campaign-question-${i}`}
-                    name={`createCampaignQuestion${i + 1}`}
-                    aria-label={`Campaign question ${i + 1}`}
-                    type="text"
-                    value={q}
-                    onChange={(e) => setQuestion(i, e.target.value)}
-                    placeholder={`Question ${i + 1}`}
-                    className="h-10 flex-1 rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
-                  />
-                  {questions.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeQuestion(i)}
-                      className="text-destructive hover:underline"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-        {createError && <p className="mt-4 text-sm text-destructive">{createError}</p>}
-        <div className="mt-8 flex justify-end border-t border-white/10 pt-8">
-          <button
-            onClick={createCampaignSubmit}
-            disabled={saving || !String(name ?? "").trim() || (orgId === null && !createOrgId)}
-            className="h-11 w-full rounded bg-primary px-6 text-base font-semibold text-primary-foreground shadow-lg shadow-blue-500/20 disabled:opacity-50 md:w-auto md:min-w-[200px]"
-          >
-            {saving ? "Creating…" : "Create campaign"}
-          </button>
-        </div>
-      </div>
-      )}
-
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-bold">
+    <div className="mx-auto max-w-[98vw] space-y-10 px-4 py-8 font-sans">
+      <section className="rounded-2xl border border-accent bg-muted p-6">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {showArchivedCampaigns || (useServerList && showDeletedCampaigns) ? "All campaigns" : "Campaigns"}
             </h2>
-            {useServerList && displayCampaigns.length > 0 && (
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  aria-label="Select all on this page"
-                  checked={validDisplayIds.length > 0 && validDisplayIds.every((id) => selectedCampaignIds.has(id))}
-                  onChange={(e) => toggleAllCampaigns(e.target.checked)}
-                  className="h-4 w-4 rounded border-accent"
-                />
-                Select all
+            <p className="text-sm text-muted-foreground">View or manage campaigns.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {useServerList && (
+              <input
+                type="search"
+                placeholder="Search name or id…"
+                value={campaignSearchQuery}
+                onChange={(e) => setCampaignSearchQuery(e.target.value)}
+                className="h-9 w-72 max-w-full rounded border border-accent bg-background/50 px-3 text-xs outline-none focus:ring-2 focus:ring-primary/20"
+                aria-label="Search campaigns"
+              />
+            )}
+            {useServerList && (
+              <label className="inline-flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                Status
+                <select
+                  value={campaignStatusFilter}
+                  onChange={(e) => {
+                    const v = e.target.value as "all" | "draft" | "active" | "inactive";
+                    setCampaignStatusFilter(v);
+                    setCampaignPage(1);
+                  }}
+                  className="h-7 rounded border border-accent bg-background/60 px-2 font-mono text-xs text-foreground outline-none"
+                >
+                  <option value="all">All</option>
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
               </label>
             )}
-          </div>
-          <div className="flex flex-wrap items-center gap-4">
-            {useServerList && (
-              <>
-                <input
-                  type="search"
-                  placeholder="Search by name or ID..."
-                  value={campaignSearchQuery}
-                  onChange={(e) => setCampaignSearchQuery(e.target.value)}
-                  className="h-9 w-48 rounded border border-border bg-black/20 px-2 text-sm"
-                  aria-label="Search campaigns"
-                />
-                <button
-                  type="button"
-                  onClick={() => loadCampaignsList(campaignPage)}
-                  disabled={loadingCampaigns}
-                  className="rounded border border-accent bg-muted px-3 py-1.5 text-xs font-mono text-muted-foreground hover:bg-background/60 disabled:opacity-50"
-                >
-                  {loadingCampaigns ? "Refreshing…" : "Refresh"}
-                </button>
-              </>
-            )}
-            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <label className="inline-flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2 text-xs text-muted-foreground">
               <input
                 name="showArchivedCampaigns"
                 aria-label="Show archived campaigns"
@@ -1701,12 +1646,12 @@ function CampaignsTab({
                   setShowArchivedCampaigns(e.target.checked);
                   if (useServerList) setCampaignPage(1);
                 }}
-                className="rounded border-accent"
+                className="h-4 w-4 rounded border-accent"
               />
               Show archived
             </label>
             {useServerList && (
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <label className="inline-flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2 text-xs text-muted-foreground">
                 <input
                   name="showDeletedCampaigns"
                   aria-label="Show deleted campaigns"
@@ -1716,199 +1661,117 @@ function CampaignsTab({
                     setShowDeletedCampaigns(e.target.checked);
                     setCampaignPage(1);
                   }}
-                  className="rounded border-accent"
+                  className="h-4 w-4 rounded border-accent"
                 />
                 Show deleted
               </label>
             )}
+            {useServerList && (
+              <>
+                <button
+                  type="button"
+                  onClick={batchArchive}
+                  disabled={batchActionLoading || validSelectedIds.length === 0}
+                  className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-mono text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+                >
+                  {batchActionLoading ? "ARCHIVING..." : "ARCHIVE SELECTED"}
+                </button>
+                <button
+                  type="button"
+                  onClick={batchDelete}
+                  disabled={batchActionLoading || validSelectedIds.length === 0}
+                  className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs font-mono text-destructive hover:bg-destructive/20 disabled:opacity-50"
+                >
+                  {batchActionLoading ? "DELETING..." : "SOFT DELETE"}
+                </button>
+                {showDeletedCampaigns && (
+                  <button
+                    type="button"
+                    onClick={batchRestore}
+                    disabled={batchActionLoading || validSelectedIds.length === 0}
+                    className="rounded border border-success/40 bg-success/10 px-3 py-2 text-xs font-mono text-success hover:bg-success/20 disabled:opacity-50"
+                  >
+                    {batchActionLoading ? "RESTORING..." : "RESTORE SELECTED"}
+                  </button>
+                )}
+                {showArchivedCampaigns && (
+                  <button
+                    type="button"
+                    onClick={batchUnarchive}
+                    disabled={batchActionLoading || validSelectedIds.length === 0}
+                    className="rounded border border-success/40 bg-success/10 px-3 py-2 text-xs font-mono text-success hover:bg-success/20 disabled:opacity-50"
+                  >
+                    {batchActionLoading ? "UNARCHIVING..." : "UNARCHIVE SELECTED"}
+                  </button>
+                )}
+              </>
+            )}
+            {useServerList && (
+              <button
+                type="button"
+                onClick={() => loadCampaignsList(campaignPage)}
+                disabled={loadingCampaigns}
+                className="rounded border border-accent bg-muted px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/60 disabled:opacity-50"
+              >
+                {loadingCampaigns ? "REFRESHING..." : "REFRESH DATABASE"}
+              </button>
+            )}
           </div>
         </div>
-        {useServerList && (loadError || batchActionError) && (
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm text-destructive">{loadError || batchActionError}</p>
+
+        {useServerList && (loadError || batchActionError || pinError) && (
+          <div className="mb-4">
+            {loadError && <p className="mb-2 text-sm text-destructive">{loadError}</p>}
+            {batchActionError && <p className="mb-2 text-sm text-destructive">{batchActionError}</p>}
+            {pinError && <p className="mb-2 text-sm text-destructive">{pinError}</p>}
             {loadError && (
               <button
                 type="button"
                 onClick={() => loadCampaignsList(campaignPage)}
                 disabled={loadingCampaigns}
-                className="rounded border border-accent px-2 py-1 text-xs disabled:opacity-50"
+                className="rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80 disabled:opacity-50"
               >
-                Retry
+                RETRY
               </button>
             )}
           </div>
         )}
-        {useServerList && validSelectedIds.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent bg-muted/50 p-3">
-            <span className="text-xs text-muted-foreground">{validSelectedIds.length} selected</span>
-            <button
-              type="button"
-              onClick={batchArchive}
-              disabled={batchActionLoading}
-              className="rounded border border-accent px-2 py-1 text-xs font-mono disabled:opacity-50"
-            >
-              Archive selected
-            </button>
-            <button
-              type="button"
-              onClick={batchDelete}
-              disabled={batchActionLoading}
-              className="rounded border border-destructive/50 px-2 py-1 text-xs font-mono text-destructive disabled:opacity-50"
-            >
-              Delete selected
-            </button>
-            {showDeletedCampaigns && (
-              <button
-                type="button"
-                onClick={batchRestore}
-                disabled={batchActionLoading}
-                className="rounded border border-accent px-2 py-1 text-xs font-mono disabled:opacity-50"
-              >
-                Restore selected
-              </button>
-            )}
-            {showArchivedCampaigns && (
-              <button
-                type="button"
-                onClick={batchUnarchive}
-                disabled={batchActionLoading}
-                className="rounded border border-accent px-2 py-1 text-xs font-mono disabled:opacity-50"
-              >
-                Unarchive selected
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setSelectedCampaignIds(new Set())}
-              className="rounded border border-accent px-2 py-1 text-xs font-mono text-muted-foreground"
-            >
-              Clear selection
-            </button>
-          </div>
-        )}
-        {displayCampaigns.length === 0 && !loadError && (
-          <p className="text-sm italic text-muted-foreground">No campaigns yet.</p>
-        )}
-        {displayCampaigns.map((c, i) => {
-          const campaignIdSafe =
-            typeof c.id === "string" && c.id.length > 0 && campaignIdUuidRegex.test(c.id);
-          return (
-          <div
-            key={c.id ?? `campaign-${i}`}
-            className="flex items-start justify-between gap-4 rounded-lg border border-white/10 bg-slate-900/50 p-4 transition hover:bg-white/5"
-          >
-            {useServerList && (
-              <div className="flex shrink-0 items-center gap-2">
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${String(c.name ?? "Campaign")}`}
-                  checked={campaignIdSafe && selectedCampaignIds.has(c.id)}
-                  onChange={() => campaignIdSafe && c.id && toggleCampaignSelection(c.id)}
-                  className="h-4 w-4 rounded border-accent"
-                />
-                <button
-                  type="button"
-                  onClick={(e) => { e.preventDefault(); campaignIdSafe && c.id && toggleCampaignPinned(c); }}
-                  className="rounded border border-accent px-2 py-0.5 text-xs font-mono text-muted-foreground hover:bg-background/60"
-                  title={c.pinned ? "Unpin" : "Pin"}
-                  aria-label={c.pinned ? "Unpin" : "Pin"}
-                >
-                  {c.pinned ? "★" : "☆"}
-                </button>
-              </div>
-            )}
-            {campaignIdSafe ? (
-            <Link
-              href={`/campaigns/${c.id}`}
-              className="min-w-0 flex-1"
-            >
-              <div>
-                <span className="font-bold">{String(c.name ?? "Untitled")}</span>
-                {organizations.length > 0 && (
-                  <span className="ml-2 rounded bg-muted-foreground/20 px-1.5 py-0.5 text-xs text-muted-foreground">
-                    {String(organizations.find((o) => o.id === c.organization_id)?.name ?? "—")}
-                  </span>
-                )}
-                {useServerList && (c.status === "draft" || c.status === "active" || c.status === "inactive") && (
-                  <span
-                    className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
-                      c.status === "active"
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : c.status === "draft"
-                          ? "bg-blue-500/20 text-blue-400"
-                          : "bg-amber-500/20 text-amber-400"
-                    }`}
-                  >
-                    {c.status}
-                  </span>
-                )}
-                {!useServerList && (c as Campaign & { deleted_at?: string | null }).deleted_at && (
-                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400">Archived</span>
-                )}
-                <p className="font-mono text-xs text-muted-foreground">{c.id != null ? String(c.id) : "—"}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {requiredCount} required fields
-                  {questionCount(c) > 0 && ` + ${questionCount(c)} questions`}
-                </p>
-              </div>
-            </Link>
-            ) : (
-            <div className="min-w-0 flex-1">
-              <div>
-                <span className="font-bold">{String(c.name ?? "Untitled")}</span>
-                {organizations.length > 0 && (
-                  <span className="ml-2 rounded bg-muted-foreground/20 px-1.5 py-0.5 text-xs text-muted-foreground">
-                    {String(organizations.find((o) => o.id === c.organization_id)?.name ?? "—")}
-                  </span>
-                )}
-                {useServerList && (c.status === "draft" || c.status === "active" || c.status === "inactive") && (
-                  <span
-                    className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
-                      c.status === "active"
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : c.status === "draft"
-                          ? "bg-blue-500/20 text-blue-400"
-                          : "bg-amber-500/20 text-amber-400"
-                    }`}
-                  >
-                    {c.status}
-                  </span>
-                )}
-                {!useServerList && (c as Campaign & { deleted_at?: string | null }).deleted_at && (
-                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400">Archived</span>
-                )}
-                <p className="font-mono text-xs text-muted-foreground">{c.id != null ? String(c.id) : "—"}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {requiredCount} required fields
-                  {questionCount(c) > 0 && ` + ${questionCount(c)} questions`}
-                </p>
-              </div>
-            </div>
-            )}
-            <div className="flex shrink-0 items-center gap-2">
-              {campaignIdSafe ? (
-              <Link
-                href={`/campaigns/${c.id}`}
-                className="text-sm font-bold text-primary hover:underline"
-              >
-                View
-              </Link>
+
+        {useServerList && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/60 bg-background/20 px-4 py-3">
+            <div className="text-xs text-muted-foreground">
+              {campaignTotal > 0 ? (
+                <>
+                  Showing{" "}
+                  <span className="font-mono text-foreground">
+                    {showingFrom}–{showingTo}
+                  </span>{" "}
+                  of <span className="font-mono text-foreground">{campaignTotal}</span>
+                </>
               ) : (
-              <span className="text-sm font-bold text-muted-foreground">View</span>
+                <>0 campaigns</>
               )}
-              <span className="text-sm text-muted-foreground">
-                {questionCount(c)} custom →
+              <span className="ml-3">
+                Selected{" "}
+                <span className="font-mono text-foreground">{validSelectedIds.length}</span>
               </span>
             </div>
-          </div>
-          );
-        })}
-        {useServerList && campaignTotal > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-4 text-sm text-muted-foreground">
-            <span>
-              Showing {showingFrom}–{showingTo} of {campaignTotal}
-            </span>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                Rows
+                <select
+                  value={campaignPageSize}
+                  onChange={(e) => {
+                    setCampaignPageSize(Number(e.target.value) || 50);
+                    setCampaignPage(1);
+                  }}
+                  className="h-7 rounded border border-accent bg-background/60 px-2 font-mono text-xs text-foreground outline-none"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </label>
               <button
                 type="button"
                 onClick={() => {
@@ -1917,11 +1780,15 @@ function CampaignsTab({
                     return Number.isFinite(next) && next >= 1 ? Math.floor(next) : 1;
                   });
                 }}
-                disabled={effectivePage <= 1 || loadingCampaigns}
-                className="rounded border border-accent px-2 py-1 disabled:opacity-50"
+                disabled={loadingCampaigns || effectivePage <= 1}
+                className="ml-2 rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80 disabled:opacity-50"
               >
-                Previous
+                PREV
               </button>
+              <div className="rounded border border-accent bg-background/40 px-3 py-2 text-xs font-mono text-muted-foreground">
+                Page <span className="text-foreground">{effectivePage}</span> /{" "}
+                <span className="text-foreground">{campaignPageCount}</span>
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -1930,15 +1797,321 @@ function CampaignsTab({
                     return Number.isFinite(next) && next >= 1 ? Math.floor(next) : 1;
                   });
                 }}
-                disabled={effectivePage >= campaignPageCount || loadingCampaigns}
-                className="rounded border border-accent px-2 py-1 disabled:opacity-50"
+                disabled={loadingCampaigns || effectivePage >= campaignPageCount}
+                className="rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80 disabled:opacity-50"
               >
-                Next
+                NEXT
               </button>
             </div>
           </div>
         )}
-      </div>
+
+        <div className="overflow-hidden rounded-xl border border-accent/60">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-background/40 text-xs text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3">
+                  {useServerList && displayCampaigns.length > 0 && (
+                    <input
+                      type="checkbox"
+                      aria-label="Select all campaigns on this page"
+                      checked={
+                        validDisplayIds.length > 0 &&
+                        validDisplayIds.every((cid) => selectedCampaignIds.has(cid))
+                      }
+                      onChange={(e) => toggleAllCampaigns(e.target.checked)}
+                      className="h-4 w-4 rounded border-accent"
+                    />
+                  )}
+                </th>
+                <th className="px-4 py-3">Campaign</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">ID</th>
+                <th className="px-4 py-3">Fields</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-accent/40">
+              {displayCampaigns.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-sm text-muted-foreground">
+                    {useServerList && loadingCampaigns ? "Loading..." : "No campaigns yet."}
+                  </td>
+                </tr>
+              ) : (
+                displayCampaigns.map((c, i) => {
+                  const campaignIdSafe =
+                    typeof c.id === "string" && c.id.length > 0 && campaignIdUuidRegex.test(c.id);
+                  const orgLabel =
+                    organizations.length > 0
+                      ? String(organizations.find((o) => o.id === c.organization_id)?.name ?? "—")
+                      : "—";
+                  const idShort =
+                    typeof c.id === "string" && c.id.length >= 8 ? `${c.id.slice(0, 8)}…` : "—";
+                  return (
+                    <tr key={c.id ?? `campaign-${i}`} className="hover:bg-background/40">
+                      <td className="px-4 py-3 align-top">
+                        {useServerList && campaignIdSafe && c.id && (
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${String(c.name ?? "Campaign")}`}
+                            checked={selectedCampaignIds.has(c.id)}
+                            onChange={() => toggleCampaignSelection(c.id)}
+                            className="h-4 w-4 rounded border-accent"
+                          />
+                        )}
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="font-semibold">
+                          <span className="inline-flex items-center gap-2">
+                            {c.pinned && (
+                              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-mono text-amber-300">
+                                PINNED
+                              </span>
+                            )}
+                            {campaignIdSafe ? (
+                              <Link
+                                href={`/campaigns/${c.id}`}
+                                className="hover:underline"
+                              >
+                                {String(c.name ?? "Untitled")}
+                              </Link>
+                            ) : (
+                              <span>{String(c.name ?? "Untitled")}</span>
+                            )}
+                          </span>
+                        </div>
+                        <div className="mt-1">
+                          <span className="rounded bg-background/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+                            {orgLabel}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        {useServerList && (c.status === "draft" || c.status === "active" || c.status === "inactive") ? (
+                          <span
+                            className={[
+                              "rounded px-2 py-0.5 text-xs",
+                              c.status === "active"
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : c.status === "draft"
+                                  ? "bg-blue-500/20 text-blue-400"
+                                  : "bg-amber-500/20 text-amber-400",
+                            ].join(" ")}
+                          >
+                            {c.status}
+                          </span>
+                        ) : !useServerList && (c as Campaign & { deleted_at?: string | null }).deleted_at ? (
+                          <span className="rounded bg-amber-500/20 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400">
+                            Archived
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground">
+                        {idShort}
+                      </td>
+                      <td className="px-4 py-3 align-top text-xs text-muted-foreground">
+                        {requiredCount} required
+                        {questionCount(c) > 0 ? ` + ${questionCount(c)} questions` : ""}
+                      </td>
+                      <td className="px-4 py-3 align-top text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {useServerList && (
+                            <button
+                              type="button"
+                              onClick={() => campaignIdSafe && c.id && toggleCampaignPinned(c)}
+                              disabled={!campaignIdSafe || !c.id}
+                              className="rounded border border-accent bg-background px-2 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80 disabled:opacity-50"
+                              aria-label={c.pinned ? "Unpin campaign" : "Pin campaign"}
+                              title={c.pinned ? "Unpin" : "Pin"}
+                            >
+                              {c.pinned ? "★" : "☆"}
+                            </button>
+                          )}
+                          {useServerList && campaignIdSafe && c.id && (
+                            <button
+                              type="button"
+                              onClick={() => duplicateCampaignFromList(c)}
+                              disabled={!!duplicatingCampaignId}
+                              className="rounded border border-accent bg-background px-2 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80 disabled:opacity-50"
+                              aria-label="Duplicate campaign"
+                              title="Duplicate"
+                            >
+                              {duplicatingCampaignId === c.id ? "…" : "Duplicate"}
+                            </button>
+                          )}
+                          {campaignIdSafe ? (
+                            <Link
+                              href={`/campaigns/${c.id}`}
+                              className="rounded border border-accent bg-background px-3 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80"
+                            >
+                              VIEW
+                            </Link>
+                          ) : (
+                            <span className="rounded border border-accent/40 bg-background/40 px-3 py-1 text-xs font-mono text-muted-foreground/70">
+                              VIEW
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+      {campaignsWrite && (
+        <section className="rounded-2xl border border-accent bg-muted p-6">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Create campaign
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Draft a campaign. Required fields are collected for payout verification.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
+            <fieldset className="space-y-6 lg:col-span-5">
+              {userRole === "SUPER_ADMIN" && orgId === null && (
+                <div className="space-y-2">
+                  <label htmlFor="create-campaign-org" className="block text-sm text-muted-foreground">
+                    Organization
+                  </label>
+                  <select
+                    id="create-campaign-org"
+                    name="createCampaignOrganization"
+                    aria-label="Organization for new campaign"
+                    value={createOrgId}
+                    onChange={(e) => {
+                      setCreateOrgId(e.target.value);
+                      setCreateError("");
+                    }}
+                    className="h-10 w-full rounded border border-accent bg-background/50 px-3 text-xs outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="">Select organization...</option>
+                    {organizations
+                      .filter((o) => typeof o.id === "string" && o.id.length > 0)
+                      .map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {String(o.name ?? "")}
+                        </option>
+                      ))}
+                  </select>
+                  {organizations.length === 0 && (
+                    <p className="text-xs text-amber-500">
+                      No organizations found. Add the{" "}
+                      <code className="rounded bg-muted px-1">organizations</code> table in Supabase (id,
+                      name, slug), add RLS so you can read it, and insert at least one row. See{" "}
+                      <code className="rounded bg-muted px-1">docs/ORGANIZATIONS_SETUP.md</code>.
+                    </p>
+                  )}
+                </div>
+              )}
+              <div className="space-y-2">
+                <label htmlFor="create-campaign-name" className="block text-sm text-muted-foreground">
+                  Campaign name
+                </label>
+                <input
+                  id="create-campaign-name"
+                  name="createCampaignName"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={`e.g. ${exampleCampaignName}`}
+                  maxLength={500}
+                  className="h-10 w-full rounded border border-accent bg-background/50 px-3 text-xs outline-none focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+              <div className="rounded-lg border border-success/30 bg-background/20 p-3">
+                <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-success">
+                  Required fields (reward payout)
+                </h3>
+                <ul className="space-y-1.5 text-xs text-muted-foreground">
+                  {CAMPAIGN_REQUIRED_FIELDS.map((f) => (
+                    <li key={f.key} className="flex items-center gap-2">
+                      <span className="text-success">✓</span>
+                      {f.label}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Collected for every response; used for payouts.
+                </p>
+              </div>
+            </fieldset>
+
+            <div className="space-y-4 lg:col-span-7">
+              <div className="flex items-start justify-between">
+                <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  Additional questions (up to {MAX_QUESTIONS})
+                  <span
+                    className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-accent/60 bg-background/60 text-[10px] font-bold text-muted-foreground"
+                    title="Optional. Leave blank to use only required fields."
+                    aria-label="Optional. Leave blank to use only required fields."
+                  >
+                    ?
+                  </span>
+                </label>
+                {questions.length < MAX_QUESTIONS && (
+                  <button
+                    type="button"
+                    onClick={addQuestion}
+                    className="rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80"
+                  >
+                    + Add
+                  </button>
+                )}
+              </div>
+              <div className="space-y-4">
+                {questions.map((q, i) => (
+                  <div key={i} className="flex gap-3">
+                    <input
+                      id={`create-campaign-question-${i}`}
+                      name={`createCampaignQuestion${i + 1}`}
+                      aria-label={`Campaign question ${i + 1}`}
+                      type="text"
+                      value={q}
+                      onChange={(e) => setQuestion(i, e.target.value)}
+                      placeholder={exampleQuestions[i] ?? `Question ${i + 1}`}
+                      className="h-10 flex-1 rounded border border-accent bg-background/50 px-3 text-xs outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    {questions.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeQuestion(i)}
+                        className="h-10 w-10 shrink-0 rounded border border-destructive/40 bg-destructive/10 text-xs font-mono text-destructive hover:bg-destructive/20"
+                        aria-label="Remove question"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {createError && <p className="mt-4 text-sm text-destructive">{createError}</p>}
+          <div className="mt-8 flex justify-end border-t border-accent/40 pt-6">
+            <button
+              onClick={createCampaignSubmit}
+              disabled={saving || !String(name ?? "").trim() || (orgId === null && !createOrgId)}
+              className="rounded bg-primary px-6 py-3 text-xs font-semibold text-primary-foreground disabled:opacity-50"
+            >
+              {saving ? "CREATING…" : "CREATE CAMPAIGN"}
+            </button>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -1950,14 +2123,96 @@ const PERMISSION_LABELS: Record<string, string> = {
 };
 
 function SettingsTab({
+  organizations,
+  onRefreshOrganizations,
   rolePermissions,
   onRefresh,
 }: {
+  organizations: OrganizationWithType[];
+  onRefreshOrganizations: () => void;
   rolePermissions: RolePermissionRow[];
   onRefresh: () => void;
 }) {
   const [updating, setUpdating] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [orgName, setOrgName] = useState("");
+  const [orgSlug, setOrgSlug] = useState("");
+  const [orgType, setOrgType] = useState<"school" | "institution">("institution");
+  const [orgSubmitting, setOrgSubmitting] = useState(false);
+  const [orgMessage, setOrgMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [orgToDelete, setOrgToDelete] = useState<OrganizationWithType | null>(null);
+  const [orgDeleteSubmitting, setOrgDeleteSubmitting] = useState(false);
+  const [createEmail, setCreateEmail] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
+  const [createRole, setCreateRole] = useState<string>("STUDENT");
+  const [createOrgId, setCreateOrgId] = useState("");
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [createMessage, setCreateMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [users, setUsers] = useState<ListUserRow[]>([]);
+  const [editingUser, setEditingUser] = useState<ListUserRow | null>(null);
+  const [editRole, setEditRole] = useState("");
+  const [editOrgId, setEditOrgId] = useState("");
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editMessage, setEditMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [resettingUser, setResettingUser] = useState<ListUserRow | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    listUsers().then(setUsers);
+  }, []);
+
+  const refreshUsers = useCallback(() => {
+    listUsers().then(setUsers);
+  }, []);
+
+  const openEdit = (u: ListUserRow) => {
+    setEditingUser(u);
+    setEditRole(u.role);
+    setEditOrgId(u.organization_id ?? "");
+    setEditMessage(null);
+  };
+  const openReset = (u: ListUserRow) => {
+    setResettingUser(u);
+    setResetPassword("");
+    setResetMessage(null);
+  };
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    setEditSubmitting(true);
+    setEditMessage(null);
+    const result = await updateUserRole(
+      editingUser.id,
+      editRole,
+      editOrgId.trim() || null
+    );
+    setEditSubmitting(false);
+    if (result.success) {
+      setEditMessage({ type: "success", text: "User updated." });
+      refreshUsers();
+      setTimeout(() => { setEditingUser(null); setEditMessage(null); }, 1500);
+    } else {
+      setEditMessage({ type: "error", text: result.error });
+    }
+  };
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resettingUser) return;
+    setResetSubmitting(true);
+    setResetMessage(null);
+    const result = await resetUserPassword(resettingUser.id, resetPassword);
+    setResetSubmitting(false);
+    if (result.success) {
+      setResetMessage({ type: "success", text: "Password reset." });
+      setResettingUser(null);
+      setResetPassword("");
+      setTimeout(() => setResetMessage(null), 2000);
+    } else {
+      setResetMessage({ type: "error", text: result.error });
+    }
+  };
 
   const getEnabled = (role: string, key: string) =>
     rolePermissions.some((r) => r.role === role && r.permission_key === key && r.enabled);
@@ -1975,12 +2230,429 @@ function SettingsTab({
     }
   };
 
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateSubmitting(true);
+    setCreateMessage(null);
+    const result = await createUserByEmail(
+      createEmail.trim(),
+      createPassword,
+      createRole,
+      createOrgId.trim() || undefined
+    );
+    setCreateSubmitting(false);
+    if (result.success) {
+      setCreateEmail("");
+      setCreatePassword("");
+      setCreateRole("STUDENT");
+      setCreateOrgId("");
+      setCreateMessage({ type: "success", text: "User created." });
+      setTimeout(() => setCreateMessage(null), 3000);
+      refreshUsers();
+    } else {
+      setCreateMessage({ type: "error", text: result.error });
+    }
+  };
+
+  const showOrgDropdown = createRole === "ORG_ADMIN" || createRole === "STUDENT";
+
+  const handleCreateOrganization = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOrgSubmitting(true);
+    setOrgMessage(null);
+    const result = await createOrganization(
+      orgName.trim(),
+      orgSlug.trim() || null,
+      orgType
+    );
+    setOrgSubmitting(false);
+    if (result.success) {
+      setOrgName("");
+      setOrgSlug("");
+      setOrgMessage({ type: "success", text: "Organization created." });
+      setTimeout(() => setOrgMessage(null), 3000);
+      onRefreshOrganizations();
+    } else {
+      setOrgMessage({ type: "error", text: result.error });
+    }
+  };
+
+  const handleConfirmDeleteOrg = async () => {
+    if (!orgToDelete) return;
+    setOrgDeleteSubmitting(true);
+    setOrgMessage(null);
+    const result = await deleteOrganization(orgToDelete.id);
+    setOrgDeleteSubmitting(false);
+    setOrgToDelete(null);
+    if (result.success) {
+      setOrgMessage({ type: "success", text: "Organization removed." });
+      setTimeout(() => setOrgMessage(null), 3000);
+      onRefreshOrganizations();
+    } else {
+      setOrgMessage({ type: "error", text: result.error });
+    }
+  };
+
   return (
     <div className="mx-auto max-w-[98vw] px-4 py-8">
-      <h2 className="mb-2 text-2xl font-bold">Role permissions</h2>
-      <p className="mb-8 text-sm text-muted-foreground">
-        Turn on or off write access for each profile. All org profiles can see fleet, campaigns, and map data; these toggles control who can change things. SUPER_ADMIN always has full access.
+      <h2 className="mb-2 text-2xl font-bold">Create user</h2>
+      <p className="mb-4 text-sm text-muted-foreground">
+        Add a new user with email and password. Choose role and optionally assign an organization (suggested for ORG_ADMIN and STUDENT).
       </p>
+      <form onSubmit={handleCreateUser} className="mb-10 rounded-xl border border-accent bg-muted p-6">
+        <div className="flex flex-wrap gap-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Email</span>
+            <input
+              type="email"
+              required
+              value={createEmail}
+              onChange={(e) => setCreateEmail(e.target.value)}
+              className="rounded border border-accent bg-background px-3 py-2 text-sm"
+              placeholder="user@example.com"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Password</span>
+            <input
+              type="password"
+              required
+              minLength={6}
+              value={createPassword}
+              onChange={(e) => setCreatePassword(e.target.value)}
+              className="rounded border border-accent bg-background px-3 py-2 text-sm"
+              placeholder="Min 6 characters"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Role</span>
+            <select
+              value={createRole}
+              onChange={(e) => setCreateRole(e.target.value)}
+              className="rounded border border-accent bg-background px-3 py-2 text-sm"
+            >
+              {ALL_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+          {showOrgDropdown && (
+            <label className="flex flex-col gap-1">
+              <span className="text-sm font-medium">Organization</span>
+              <select
+                value={createOrgId}
+                onChange={(e) => setCreateOrgId(e.target.value)}
+                className="rounded border border-accent bg-background px-3 py-2 text-sm"
+              >
+                <option value="">— None —</option>
+                {organizations.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className="flex items-end gap-2">
+            <button
+              type="submit"
+              disabled={createSubmitting}
+              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {createSubmitting ? "Creating…" : "Create user"}
+            </button>
+          </div>
+        </div>
+        {createMessage && (
+          <p
+            className={`mt-3 text-sm ${createMessage.type === "success" ? "text-success" : "text-destructive"}`}
+          >
+            {createMessage.text}
+          </p>
+        )}
+      </form>
+
+      <h2 className="mb-2 text-2xl font-bold">Users</h2>
+      <p className="mb-4 text-sm text-muted-foreground">
+        Existing app users (up to 100). Edit role/organization or reset password from row actions.
+      </p>
+
+      {editingUser && (
+        <form onSubmit={handleSaveEdit} className="mb-4 rounded-xl border border-accent bg-muted p-4">
+          <h3 className="mb-3 text-sm font-bold">Edit user: {editingUser.email}</h3>
+          <div className="flex flex-wrap items-end gap-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium">Role</span>
+              <select
+                value={editRole}
+                onChange={(e) => setEditRole(e.target.value)}
+                className="rounded border border-accent bg-background px-3 py-2 text-sm"
+              >
+                {ALL_ROLES.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium">Organization</span>
+              <select
+                value={editOrgId}
+                onChange={(e) => setEditOrgId(e.target.value)}
+                className="rounded border border-accent bg-background px-3 py-2 text-sm"
+              >
+                <option value="">— None —</option>
+                {organizations.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+            </label>
+            <button type="submit" disabled={editSubmitting} className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50">
+              {editSubmitting ? "Saving…" : "Save"}
+            </button>
+            <button type="button" onClick={() => { setEditingUser(null); setEditMessage(null); }} className="rounded border border-accent px-3 py-2 text-sm hover:bg-muted">
+              Cancel
+            </button>
+          </div>
+          {editMessage && (
+            <p className={`mt-2 text-sm ${editMessage.type === "success" ? "text-success" : "text-destructive"}`}>
+              {editMessage.text}
+            </p>
+          )}
+        </form>
+      )}
+
+      {resettingUser && (
+        <form onSubmit={handleResetPassword} className="mb-4 rounded-xl border border-accent bg-muted p-4">
+          <h3 className="mb-3 text-sm font-bold">Reset password: {resettingUser.email}</h3>
+          <div className="flex flex-wrap items-end gap-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium">New password</span>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={resetPassword}
+                onChange={(e) => setResetPassword(e.target.value)}
+                className="rounded border border-accent bg-background px-3 py-2 text-sm"
+                placeholder="Min 6 characters"
+              />
+            </label>
+            <button type="submit" disabled={resetSubmitting} className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50">
+              {resetSubmitting ? "Resetting…" : "Reset password"}
+            </button>
+            <button type="button" onClick={() => { setResettingUser(null); setResetMessage(null); }} className="rounded border border-accent px-3 py-2 text-sm hover:bg-muted">
+              Cancel
+            </button>
+          </div>
+          {resetMessage && (
+            <p className={`mt-2 text-sm ${resetMessage.type === "success" ? "text-success" : "text-destructive"}`}>
+              {resetMessage.text}
+            </p>
+          )}
+        </form>
+      )}
+
+      <div className="overflow-x-auto rounded-xl border border-accent bg-muted">
+        <table className="w-full min-w-[560px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-accent">
+              <th className="p-3 font-medium">Email</th>
+              <th className="p-3 font-medium">Role</th>
+              <th className="p-3 font-medium">Organization</th>
+              <th className="p-3 font-medium">Last sign-in</th>
+              <th className="p-3 font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-3 text-muted-foreground">
+                  No users yet.
+                </td>
+              </tr>
+            )}
+            {users.map((u) => (
+              <tr key={u.id} className="border-b border-accent last:border-0">
+                <td className="p-3">{u.email}</td>
+                <td className="p-3 font-mono text-xs uppercase">{u.role}</td>
+                <td className="p-3">{u.organization_name ?? "—"}</td>
+                <td className="p-3 text-sm text-muted-foreground">
+                  {u.last_sign_in_at
+                    ? new Date(u.last_sign_in_at).toLocaleString(undefined, {
+                        dateStyle: "short",
+                        timeStyle: "short",
+                      })
+                    : "Never"}
+                </td>
+                <td className="p-3">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(u)}
+                      className="rounded border border-accent px-2 py-1 text-xs hover:bg-muted"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openReset(u)}
+                      className="rounded border border-accent px-2 py-1 text-xs hover:bg-muted"
+                    >
+                      Reset password
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h2 className="mb-2 mt-12 text-2xl font-bold">Organizations</h2>
+      <p className="mb-4 text-sm text-muted-foreground">
+        Add schools or institutions (e.g. Offbeat Options). Schools appear in Fleet and Campaigns; institutions appear only in user assignment.
+      </p>
+      <form onSubmit={handleCreateOrganization} className="mb-6 rounded-xl border border-accent bg-muted p-6">
+        <div className="flex flex-wrap gap-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Name</span>
+            <input
+              type="text"
+              required
+              value={orgName}
+              onChange={(e) => setOrgName(e.target.value)}
+              className="rounded border border-accent bg-background px-3 py-2 text-sm"
+              placeholder="e.g. Offbeat Options"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Slug (optional)</span>
+            <input
+              type="text"
+              value={orgSlug}
+              onChange={(e) => setOrgSlug(e.target.value)}
+              className="rounded border border-accent bg-background px-3 py-2 text-sm"
+              placeholder="e.g. offbeat-options"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Type</span>
+            <select
+              value={orgType}
+              onChange={(e) => setOrgType(e.target.value as "school" | "institution")}
+              className="rounded border border-accent bg-background px-3 py-2 text-sm"
+            >
+              <option value="school">School</option>
+              <option value="institution">Institution</option>
+            </select>
+          </label>
+          <div className="flex items-end gap-2">
+            <button
+              type="submit"
+              disabled={orgSubmitting}
+              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {orgSubmitting ? "Adding…" : "Add organization"}
+            </button>
+          </div>
+        </div>
+        {orgMessage && (
+          <p className={`mt-3 text-sm ${orgMessage.type === "success" ? "text-success" : "text-destructive"}`}>
+            {orgMessage.text}
+          </p>
+        )}
+      </form>
+      {orgToDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-org-title"
+        >
+          <div className="w-full max-w-md rounded-xl border border-accent bg-background p-6 shadow-lg">
+            <h3 id="delete-org-title" className="mb-2 text-lg font-bold text-destructive">
+              Remove organization?
+            </h3>
+            <p className="mb-4 text-sm text-muted-foreground">
+              <strong className="text-foreground">{orgToDelete.name}</strong> will be permanently removed. This cannot be undone.
+            </p>
+            <p className="mb-4 text-sm text-muted-foreground">
+              Deletion is only allowed if the organization has no tokens, campaigns, or users assigned. If any are linked, you will see an error and the organization will not be deleted.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setOrgToDelete(null)}
+                disabled={orgDeleteSubmitting}
+                className="rounded border border-accent px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteOrg}
+                disabled={orgDeleteSubmitting}
+                className="rounded bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {orgDeleteSubmitting ? "Removing…" : "Remove organization"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mb-10 overflow-x-auto rounded-xl border border-accent bg-muted">
+        <table className="w-full min-w-[480px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-accent">
+              <th className="p-3 font-medium">Name</th>
+              <th className="p-3 font-medium">Slug</th>
+              <th className="p-3 font-medium">Type</th>
+              <th className="p-3 font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {organizations.length === 0 && (
+              <tr>
+                <td colSpan={4} className="p-3 text-muted-foreground">
+                  No organizations yet. Add one above.
+                </td>
+              </tr>
+            )}
+            {organizations.map((o) => (
+              <tr key={o.id} className="border-b border-accent last:border-0">
+                <td className="p-3">{o.name}</td>
+                <td className="p-3 font-mono text-xs">{o.slug ?? "—"}</td>
+                <td className="p-3">{o.type}</td>
+                <td className="p-3">
+                  <button
+                    type="button"
+                    onClick={() => setOrgToDelete(o)}
+                    className="rounded border border-destructive/50 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h2 className="mb-2 text-2xl font-bold">Role permissions</h2>
+      <p className="mb-2 text-sm text-muted-foreground">
+        Your role (SUPER_ADMIN) has full access to all features. The toggles below control write access for ORG_ADMIN and AUDITOR only. STUDENT has no Command Center write access.
+      </p>
+      <p className="mb-2 text-sm text-muted-foreground">
+        All org roles can view fleet, campaigns, and map; these toggles determine who can change data (bulk assign, create/edit campaigns, reset map).
+      </p>
+      <ul className="mb-6 list-inside list-disc text-sm text-muted-foreground">
+        <li><strong>Fleet write</strong> — bulk assign tokens to a school / campaign</li>
+        <li><strong>Campaigns write</strong> — create, edit, archive, pin campaigns</li>
+        <li><strong>Map reset</strong> — reset simulation (tokens back to active)</li>
+      </ul>
       <div className="space-y-8">
         {CONTROLLABLE_ROLES.map((role) => (
           <div key={role} className="rounded-xl border border-accent bg-muted p-6">

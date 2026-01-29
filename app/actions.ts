@@ -2,6 +2,7 @@
 
 import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
+import { Resend } from 'resend'
 import { createServerSupabase } from '@/lib/supabase-server'
 import {
   type BulkAssignToSchoolResult,
@@ -14,6 +15,7 @@ import {
   type RolePermissionKey,
   type RolePermissionRow,
 } from '@/lib/constants'
+import type { UserRole } from '@/types'
 
 // 1. STRICT VALIDATION & HELPERS
 const UUID_REGEX =
@@ -494,5 +496,401 @@ export async function setRolePermission(
     return { success: true }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Update failed.' }
+  }
+}
+
+const VALID_ROLES: UserRole[] = ['SUPER_ADMIN', 'ORG_ADMIN', 'AUDITOR', 'STUDENT']
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const MIN_PASSWORD_LENGTH = 6
+
+export async function createUserByEmail(
+  email: string,
+  password: string,
+  role: string,
+  organizationId?: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated.' }
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+      return { success: false, error: 'Only SUPER_ADMIN can create users.' }
+    }
+
+    const trimmedEmail = typeof email === 'string' ? email.trim() : ''
+    if (!EMAIL_REGEX.test(trimmedEmail)) return { success: false, error: 'Invalid email format.' }
+    if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+      return { success: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` }
+    }
+    if (!VALID_ROLES.includes(role as UserRole)) {
+      return { success: false, error: 'Invalid role. Must be one of: SUPER_ADMIN, ORG_ADMIN, AUDITOR, STUDENT.' }
+    }
+
+    let orgId: string | null = null
+    if (organizationId != null && organizationId.trim() !== '') {
+      orgId = organizationId.trim()
+      if (!isValidUUID(orgId)) return { success: false, error: 'Invalid organization ID.' }
+    }
+
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    if (orgId) {
+      const { data: org } = await supabase.from('organizations').select('id').eq('id', orgId).single()
+      if (!org) return { success: false, error: 'Organization not found.' }
+    }
+
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email: trimmedEmail,
+      password,
+      email_confirm: true,
+    })
+
+    if (authError) {
+      return { success: false, error: authError.message ?? 'Failed to create user.' }
+    }
+    if (!authData?.user?.id) {
+      return { success: false, error: 'User created but no user id returned.' }
+    }
+
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .upsert(
+        {
+          id: authData.user.id,
+          email: trimmedEmail,
+          role,
+          organization_id: orgId ?? null,
+        },
+        { onConflict: 'id' }
+      )
+
+    if (profileError) {
+      return { success: false, error: profileError.message ?? 'User created but profile update failed.' }
+    }
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to create user.' }
+  }
+}
+
+export type ListUserRow = {
+  id: string
+  email: string
+  role: string
+  organization_id: string | null
+  organization_name: string | null
+  last_sign_in_at: string | null
+}
+
+const LIST_USERS_LIMIT = 100
+
+export async function listUsers(): Promise<ListUserRow[]> {
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return []
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+      return []
+    }
+
+    const supabase = getSupabaseService()
+    if (!supabase) return []
+
+    const { data: profileData, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, email, role, organization_id')
+      .order('email')
+      .limit(LIST_USERS_LIMIT)
+
+    if (profileError) return []
+    if (!profileData?.length) return []
+
+    const orgIds = [...new Set((profileData as Array<{ organization_id: string | null }>).map((r) => r.organization_id).filter(Boolean))] as string[]
+    const orgNameMap = new Map<string, string>()
+    if (orgIds.length > 0) {
+      const { data: orgData } = await supabase.from('organizations').select('id, name').in('id', orgIds)
+      ;(orgData ?? []).forEach((o: { id: string; name: string }) => orgNameMap.set(o.id, o.name))
+    }
+
+    const lastSignInMap = new Map<string, string | null>()
+    let authPage = 1
+    const authPerPage = 1000
+    while (true) {
+      const { data: authData } = await supabase.auth.admin.listUsers({ page: authPage, perPage: authPerPage })
+      const users = (authData?.users ?? []) as Array<{ id: string; last_sign_in_at?: string | null }>
+      if (!users.length) break
+      users.forEach((u) => lastSignInMap.set(u.id, u.last_sign_in_at ?? null))
+      if (users.length < authPerPage) break
+      authPage += 1
+    }
+
+    return (profileData as Array<{ id: string; email: string; role: string; organization_id: string | null }>).map((r) => ({
+      id: r.id,
+      email: r.email,
+      role: r.role,
+      organization_id: r.organization_id,
+      organization_name: r.organization_id ? orgNameMap.get(r.organization_id) ?? null : null,
+      last_sign_in_at: lastSignInMap.get(r.id) ?? null,
+    }))
+  } catch {
+    return []
+  }
+}
+
+export async function updateUserRole(
+  profileId: string,
+  role: string,
+  organizationId?: string | null
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated.' }
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+      return { success: false, error: 'Only SUPER_ADMIN can update user role.' }
+    }
+
+    if (!isValidUUID(profileId)) return { success: false, error: 'Invalid user id.' }
+    if (!VALID_ROLES.includes(role as UserRole)) {
+      return { success: false, error: 'Invalid role. Must be one of: SUPER_ADMIN, ORG_ADMIN, AUDITOR, STUDENT.' }
+    }
+
+    let orgId: string | null = null
+    if (organizationId != null && String(organizationId).trim() !== '') {
+      const trimmed = String(organizationId).trim()
+      if (!isValidUUID(trimmed)) return { success: false, error: 'Invalid organization id.' }
+      orgId = trimmed
+    }
+
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ role, organization_id: orgId })
+      .eq('id', profileId)
+
+    if (error) return { success: false, error: error.message ?? 'Update failed.' }
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Update failed.' }
+  }
+}
+
+export async function resetUserPassword(
+  userId: string,
+  newPassword: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated.' }
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+      return { success: false, error: 'Only SUPER_ADMIN can reset passwords.' }
+    }
+
+    if (!isValidUUID(userId)) return { success: false, error: 'Invalid user id.' }
+    if (typeof newPassword !== 'string' || newPassword.length < MIN_PASSWORD_LENGTH) {
+      return { success: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` }
+    }
+
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    const { error } = await supabase.auth.admin.updateUserById(userId, { password: newPassword })
+
+    if (error) return { success: false, error: error.message ?? 'Password reset failed.' }
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Password reset failed.' }
+  }
+}
+
+const ORG_TYPES = ['school', 'institution'] as const
+export type OrganizationType = (typeof ORG_TYPES)[number]
+
+export async function createOrganization(
+  name: string,
+  slug: string | null,
+  type: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated.' }
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+      return { success: false, error: 'Only SUPER_ADMIN can create organizations.' }
+    }
+
+    const trimmedName = typeof name === 'string' ? name.trim() : ''
+    if (!trimmedName) return { success: false, error: 'Organization name is required.' }
+    if (!ORG_TYPES.includes(type as OrganizationType)) {
+      return { success: false, error: 'Type must be school or institution.' }
+    }
+
+    let slugValue: string | null = null
+    if (slug != null && typeof slug === 'string' && slug.trim() !== '') {
+      slugValue = slug.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+      if (slugValue === '') slugValue = null
+    }
+    if (slugValue == null) {
+      slugValue = trimmedName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || null
+    }
+
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    const { error } = await supabase
+      .from('organizations')
+      .insert({ name: trimmedName, slug: slugValue, type })
+
+    if (error) return { success: false, error: error.message ?? 'Failed to create organization.' }
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to create organization.' }
+  }
+}
+
+export async function deleteOrganization(
+  orgId: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const supabaseAuth = await createServerSupabase()
+    const { data: { user } } = await supabaseAuth.auth.getUser()
+    if (!user) return { success: false, error: 'Not authenticated.' }
+
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if ((profile as { role?: string } | null)?.role !== 'SUPER_ADMIN') {
+      return { success: false, error: 'Only SUPER_ADMIN can delete organizations.' }
+    }
+
+    if (!isValidUUID(orgId)) return { success: false, error: 'Invalid organization id.' }
+
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    const { count: tokenCount } = await supabase
+      .from('tokens')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+    if ((tokenCount ?? 0) > 0) {
+      return { success: false, error: `Cannot delete: organization is linked to ${tokenCount} token(s). Reassign or remove tokens first.` }
+    }
+
+    const { count: campaignCount } = await supabase
+      .from('campaigns')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+    if ((campaignCount ?? 0) > 0) {
+      return { success: false, error: `Cannot delete: organization has ${campaignCount} campaign(s). Move or delete campaigns first.` }
+    }
+
+    const { count: profileCount } = await supabase
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+    if ((profileCount ?? 0) > 0) {
+      return { success: false, error: `Cannot delete: ${profileCount} user(s) are assigned to this organization. Reassign them first.` }
+    }
+
+    const { error } = await supabase.from('organizations').delete().eq('id', orgId)
+    if (error) return { success: false, error: error.message ?? 'Failed to delete organization.' }
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Failed to delete organization.' }
+  }
+}
+
+// --- Access request (landing page) ---
+
+export type SubmitAccessRequestInput = { name: string; email: string; institution?: string; message?: string }
+
+export async function submitAccessRequest(
+  input: SubmitAccessRequestInput
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const name = (input.name ?? '').trim()
+    const email = (input.email ?? '').trim()
+    const institution = (input.institution ?? '').trim() || null
+    const message = (input.message ?? '').trim() || null
+    if (!name) return { success: false, error: 'Name is required.' }
+    if (!email) return { success: false, error: 'Email is required.' }
+
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    const { error: insertError } = await supabase.from('access_requests').insert({
+      name,
+      email,
+      institution,
+      message,
+    })
+    if (insertError) {
+      console.error('[submitAccessRequest] Insert error:', insertError.message)
+      return { success: false, error: 'Could not submit request. Please try again.' }
+    }
+
+    const apiKey = process.env.RESEND_API_KEY
+    const toEmail = process.env.ACCESS_REQUEST_EMAIL
+    const fromEmail = process.env.RESEND_FROM ?? 'onboarding@resend.dev'
+    if (apiKey && toEmail) {
+      const resend = new Resend(apiKey)
+      const { error: emailError } = await resend.emails.send({
+        from: fromEmail,
+        to: toEmail,
+        subject: `Access request: ${name} (${email})`,
+        text: `Name: ${name}\nEmail: ${email}\nInstitution: ${institution ?? '(none)'}\nMessage: ${message ?? '(none)'}`,
+      })
+      if (emailError) {
+        console.error('[submitAccessRequest] Resend error:', emailError.message)
+        return { success: false, error: 'Request saved but email failed. Please try again or contact support.' }
+      }
+    }
+
+    return { success: true }
+  } catch (err) {
+    console.error('[submitAccessRequest] Unexpected error:', err)
+    return { success: false, error: 'Something went wrong. Please try again.' }
   }
 }

@@ -1,0 +1,68 @@
+SETTINGS TAB — PLANNING AGENT SPEC (SUPER ADMIN ACCESS)
+=======================================================
+Use this document to implement improvements to the Settings tab for SuperAdmin. Scope: SuperAdmin-only access settings (user creation, role assignment, and related controls). The Settings tab is only visible when the current user's profile.role is SUPER_ADMIN.
+
+
+CONTEXT: WHAT THE SETTINGS TAB IS TODAY
+---------------------------------------
+- The Settings tab currently shows a single section: "Role permissions." It lists CONTROLLABLE_ROLES (ORG_ADMIN, AUDITOR) and toggles for ROLE_PERMISSION_KEYS (fleet_write, campaigns_write, map_reset). SUPER_ADMIN always has full access in code and is not listed.
+- Role permissions are persisted in role_permissions; changes are gated by setRolePermission in app/actions.ts, which checks profile.role === 'SUPER_ADMIN' and uses getSupabaseService() for the write.
+- User identity lives in Supabase Auth; app-specific profile (role, organization_id) lives in the profiles table (id, email, role, organization_id). id is the Auth user id. Available roles: SUPER_ADMIN, ORG_ADMIN, AUDITOR, STUDENT.
+- There is no UI today to create users or assign roles; that is the main gap for SuperAdmin.
+
+
+OUT OF SCOPE / DO NOT DO (FOR THIS SPEC)
+-----------------------------------------
+- Do NOT add non–SuperAdmin settings (e.g. "my account" or org-level settings) in this spec; focus on SuperAdmin access only.
+- Do NOT implement SSO, magic links, or OAuth in this spec; user creation is email + password only for now.
+- Do NOT add fleet, campaigns, or map features inside Settings; keep Settings limited to access and user management.
+
+
+IMPROVEMENTS TO IMPLEMENT
+--------------------------
+
+1. Create user (email + password, role, optional organization)
+   - Add a "Create user" section in the Settings tab (above or below Role permissions).
+   - Form fields: email (required), password (required), role (required; one of SUPER_ADMIN, ORG_ADMIN, AUDITOR, STUDENT), organization (optional; required or suggested when role is ORG_ADMIN or STUDENT).
+   - Backend: use Supabase Admin API to create the Auth user (auth.admin.createUser with email and password). This must run server-side with the service role client (getSupabaseService()). After successful creation, insert or upsert a row in profiles with id = auth user id, email, role, and organization_id (if provided).
+   - Ensure the profiles table (or trigger) is aligned so that new Auth users get a profile row with the chosen role and organization_id; if a trigger already creates a default profile, the server action should update that row with role and organization_id.
+   - Validation: require valid email format, password meeting Supabase's policy (length/complexity as per Supabase Auth config), and a valid role from the four allowed values. If organization_id is required for the chosen role, validate it against the organizations table.
+   - Success: clear form and show a short success message (e.g. "User created"). Optionally show the new user in a simple list (see item 3).
+
+2. List organizations for the create-user form
+   - When role is ORG_ADMIN or STUDENT, show an organization selector (dropdown or searchable list). Populate it from the organizations table. Add a server action or reuse an existing pattern (e.g. list from dashboard-client or schools) to fetch organizations for this dropdown. Do not allow creating organizations from the create-user form in this spec; only assign to existing organizations.
+
+3. (Optional) List existing users
+   - Add a "Users" section that lists existing app users (from profiles, joined with Auth if needed for email/status). Columns: email, role, organization (name), last sign-in or created (if available). This allows SuperAdmin to see who exists and optionally supports future "edit role" or "reset password" actions. Pagination or a reasonable cap (e.g. first 100) is fine. If not implemented now, the spec should still allow adding it later without breaking the create-user flow.
+
+4. (Optional) Edit user role / organization
+   - Allow SuperAdmin to change an existing user's role and/or organization_id from the Users list (e.g. row action or edit modal). This is an update to profiles only; no Auth API call. Gate with SUPER_ADMIN and use service role if needed for RLS.
+
+5. (Optional) Reset user password (Admin API)
+   - Allow SuperAdmin to set a new password for an existing user via auth.admin.updateUserById. Expose as a "Reset password" action from the Users list or a small form (email → new password). Only SUPER_ADMIN; use getSupabaseService() for the Auth admin call.
+
+
+PRIORITY ORDER (suggested for planning)
+---------------------------------------
+- High: 1 (create user with email, password, role, optional organization), 2 (list organizations for form).
+- Medium: 3 (list existing users).
+- Optional: 4 (edit user role/organization), 5 (reset password).
+
+
+FILES / AREAS TO TOUCH (minimal)
+---------------------------------
+- app/dashboard-client.tsx — SettingsTab: add "Create user" form (email, password, role, organization dropdown when role is ORG_ADMIN or STUDENT). Optionally add "Users" list and actions.
+- app/actions.ts (or a dedicated settings/server module): add createUserByEmail( email, password, role, organizationId?: string ) using getSupabaseService(), then auth.admin.createUser and profiles insert/upsert. Add listOrganizations() if not already available for reuse. Optionally add listUsers(), updateUserRole(), and resetUserPassword().
+- lib/constants.ts — already defines CONTROLLABLE_ROLES and ROLE_PERMISSION_KEYS; UserRole / roles for creation can be imported from types or a shared constant (SUPER_ADMIN, ORG_ADMIN, AUDITOR, STUDENT).
+- types/index.ts — UserProfile / UserRole already defined; use for create-user form and user list types.
+- Supabase: ensure profiles table has id (uuid, FK to auth.users), email, role, organization_id; RLS should allow service role to insert/update profiles. No schema change required if already in place.
+
+
+SECURITY NOTES
+---------------
+- Create user and any Admin API calls must run only in server actions (or API routes) and must verify the current user is SUPER_ADMIN via profiles.role before calling getSupabaseService() or auth.admin.*.
+- Never expose SUPABASE_SERVICE_ROLE_KEY to the client. Use getSupabaseService() only on the server.
+- Passwords must not be logged or stored beyond the one-time create/update call to Supabase Auth.
+
+
+END OF SPEC

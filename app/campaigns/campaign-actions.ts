@@ -171,6 +171,47 @@ export async function getCampaign(id: string): Promise<
   }
 }
 
+export type CampaignAuditLogEvent = {
+  event_type: string
+  at: string
+  actor_user_id: string | null
+}
+
+export async function getCampaignAuditLog(
+  campaignId: string,
+  limit = 10
+): Promise<
+  { success: true; events: CampaignAuditLogEvent[] } | { success: false; error: string }
+> {
+  try {
+    if (typeof campaignId !== 'string' || !isUuidLike(campaignId)) {
+      return { success: false, error: 'Invalid campaign id.' }
+    }
+    const auth = await requireSuperAdmin()
+    if (!auth.ok) return { success: false, error: auth.error }
+
+    const supabase = await createServerSupabase()
+    const safeLimit = Math.min(20, Math.max(1, Number(limit) || 10))
+    const { data, error } = await supabase
+      .from('campaign_audit_log')
+      .select('event_type, at, actor_user_id')
+      .eq('campaign_id', campaignId)
+      .order('at', { ascending: false })
+      .limit(safeLimit)
+
+    if (error) return { success: false, error: 'Failed to load audit log.' }
+    const rows = Array.isArray(data) ? data : []
+    const events: CampaignAuditLogEvent[] = rows.map((row: { event_type?: string; at?: string; actor_user_id?: string | null }) => ({
+      event_type: typeof row.event_type === 'string' ? row.event_type : '—',
+      at: typeof row.at === 'string' ? row.at : new Date().toISOString(),
+      actor_user_id: row.actor_user_id ?? null,
+    }))
+    return { success: true, events }
+  } catch (err) {
+    return { success: false, error: 'Failed to load audit log.' }
+  }
+}
+
 const ALLOWED_CAMPAIGN_KEYS = new Set([
   'name', 'organization_id', 'required_fields', 'questions', 'status',
 ])
@@ -484,11 +525,11 @@ export async function updateCampaignPinned(
       )
       .eq('id', id)
 
-    if (error) return { success: false, error: 'Update failed.' }
+    if (error) return { success: false, error: error.message ?? 'Update failed.' }
     await logCampaignAudit(supabase, id, pinned ? 'pinned' : 'unpinned', userId, { pinned })
     return { success: true }
   } catch (err) {
-    return { success: false, error: 'Update failed.' }
+    return { success: false, error: err instanceof Error ? err.message : 'Update failed.' }
   }
 }
 
