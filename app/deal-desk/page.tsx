@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   GraduationCap,
-  HelpCircle,
   PiggyBank,
   Save,
   Users,
@@ -431,24 +430,6 @@ export function DealDeskContent() {
   const [deletingScenarios, setDeletingScenarios] = useState(false);
   const [deleteError, setDeleteError] = useState<string>("");
   const [previewScenario, setPreviewScenario] = useState<DealScenarioRow | null>(null);
-  const [hintOpen, setHintOpen] = useState(false);
-  const hintRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!hintOpen) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (hintRef.current && !hintRef.current.contains(e.target as Node)) setHintOpen(false);
-    }
-    function handleEscape(e: KeyboardEvent) {
-      if (e.key === "Escape") setHintOpen(false);
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [hintOpen]);
 
   const computed = useMemo(() => {
     const E = safeNumber(endowmentSize);
@@ -1070,107 +1051,13 @@ export function DealDeskContent() {
   return (
       <div className="mx-auto max-w-[98vw] px-4 py-8">
         <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-          <div ref={hintRef} className="relative">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold tracking-tight">Campus Mobility Project Deal Qualification Desk</h1>
-              <button
-                type="button"
-                onClick={() => setHintOpen((o) => !o)}
-                aria-label="Explain everything (ELI5)"
-                aria-expanded={hintOpen}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-accent bg-muted text-muted-foreground hover:bg-background/60 hover:text-foreground focus:ring-2 focus:ring-primary/20"
-              >
-                <HelpCircle className="h-4 w-4" />
-              </button>
-            </div>
-            {hintOpen && (
-              <div className="absolute left-0 top-full z-50 mt-2 max-h-[min(70vh,600px)] w-full min-w-[320px] max-w-2xl overflow-y-auto rounded-xl border border-accent bg-muted p-5 shadow-xl">
-                <h3 className="mb-3 text-sm font-semibold text-foreground">
-                  Deal Desk legend (definitions)
-                </h3>
-                <ul className="space-y-4 text-sm text-muted-foreground">
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Institution Name</span>
-                    {" "}— The school or opportunity you&apos;re evaluating.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Endowment (E)</span>
-                    {" "}— The institution&apos;s total reported endowment (USD).
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Student Enrollment (T)</span>
-                    {" "}— Total student enrollment.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Target Reach (P)</span>
-                    {" "}— Percent of students expected to be eligible/participate (e.g., 20%).
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Engagement / Redemption Velocity (R)</span>
-                    {" "}— Expected tokens redeemed per participating student per month.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Yield Rate (i)</span>
-                    {" "}— Assumed annual yield environment used for sizing (percent).
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Deal Score</span>
-                    {" "}— A 1–100 qualification score: 1 = poor fit, 100 = excellent fit.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Fee Recoup Period</span>
-                    {" "}— Time until risk-free yield covers the 10% upfront fee.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Total Deal Value (TDV)</span>
-                    {" "}— Capital allocated for the deal (USD), sized by the engine.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Annual Reward Dollars to Students</span>
-                    {" "}— Estimated annual rewards delivered directly to students (USD).
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Students Expected to Participate</span>
-                    {" "}— Estimated participants (Enrollment × Reach %).
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Endowment Per Student (EPS)</span>
-                    {" "}— Endowment ÷ enrollment (proxy for affordability/financial depth).
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">Allocation %</span>
-                    {" "}— TDV ÷ endowment (percent of endowment allocated to the deal).
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">GREEN / ORANGE / RED zone</span>
-                    {" "}— Status band: Green = Pursue; Orange = Consider; Red = Not Fit.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">FAST TRACK</span>
-                    {" "}— Green deal under $5M TDV; often CFO-approvable without full board process.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">BOARD VOTE LIKELY</span>
-                    {" "}— TDV over $5M; board approval is commonly required.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">K_eff</span>
-                    {" "}— Efficiency factor used for TDV sizing. In normal yield conditions, K_eff ≈ 0.567 (= 90% invested principal × 63% student payout). In low-yield zones, the payout stack can shift (fee sacrifice/waiver), and K_eff adjusts accordingly.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">9 months</span>
-                    {" "}— Academic year assumption (Sept–May) used for token math.
-                  </li>
-                  <li>
-                    <span className="font-mono font-semibold text-foreground">$25 token</span>
-                    {" "}— Token unit value when redeemed (USD).
-                  </li>
-                </ul>
-                <p className="mt-4 text-xs text-muted-foreground/80">
-                  Click outside or press Escape to close.
-                </p>
-              </div>
-            )}
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight">Campus Mobility Project Deal Qualification Desk</h1>
+            <InlineHelp
+              ariaLabel="Deal Desk legend (definitions)"
+              heading="Deal Desk legend (definitions)"
+              text="Institution Name — The school or opportunity you're evaluating. Endowment (E) — The institution's total reported endowment (USD). Student Enrollment (T) — Total student enrollment. Target Reach (P) — Percent of students expected to be eligible/participate (e.g., 20%). Engagement / Redemption Velocity (R) — Expected tokens redeemed per participating student per month. Yield Rate (i) — Assumed annual yield environment used for sizing (percent). Deal Score — A 1–100 qualification score: 1 = poor fit, 100 = excellent fit. Fee Recoup Period — Time until risk-free yield covers the 10% upfront fee. Total Deal Value (TDV) — Capital allocated for the deal (USD), sized by the engine. Annual Reward Dollars to Students — Estimated annual rewards delivered directly to students (USD). Students Expected to Participate — Estimated participants (Enrollment × Reach %). Endowment Per Student (EPS) — Endowment ÷ enrollment (proxy for affordability/financial depth). Allocation % — TDV ÷ endowment (percent of endowment allocated to the deal). GREEN / ORANGE / RED zone — Status band: Green = Pursue; Orange = Consider; Red = Not Fit. FAST TRACK — Green deal under $5M TDV; often CFO-approvable without full board process. BOARD VOTE LIKELY — TDV over $5M; board approval is commonly required. K_eff — Efficiency factor used for TDV sizing. In normal yield conditions, K_eff ≈ 0.567 (= 90% invested principal × 63% student payout). In low-yield zones, the payout stack can shift (fee sacrifice/waiver), and K_eff adjusts accordingly. 9 months — Academic year assumption (Sept–May) used for token math. $25 token — Token unit value when redeemed (USD)."
+            />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1178,20 +1065,17 @@ export function DealDeskContent() {
               onClick={resetDraft}
               className="rounded border border-accent bg-muted px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/60"
             >
-              NEW DRAFT
+              RESET INPUTS
             </button>
           </div>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Left: Inputs */}
-          <section className="lg:col-span-7">
+          <section className="flex flex-col lg:col-span-7">
             <div className="rounded-2xl border border-accent bg-muted p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-sm font-semibold tracking-wide">Inputs</h2>
-                <div className="text-xs font-mono text-muted-foreground">
-                  OYE: K<sub>eff</sub> = {computed.kEff != null ? computed.kEff.toFixed(3) : EFFICIENCY_CONSTANT}
-                </div>
+              <div className="mb-4">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Inputs</h2>
               </div>
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1351,7 +1235,7 @@ export function DealDeskContent() {
                 </button>
               </div>
             </div>
-            <div className="mt-4 rounded-2xl border border-accent bg-muted p-4 text-sm leading-relaxed text-muted-foreground">
+            <div className="mt-4 flex-1 rounded-2xl border border-accent bg-muted p-4 text-sm leading-relaxed text-muted-foreground">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Deal Summary
               </div>
@@ -1368,9 +1252,9 @@ export function DealDeskContent() {
                 <div className="mb-6">
                   <label
                     htmlFor="deal-card-scenario-name"
-                    className="mb-1 block text-xs text-muted-foreground"
+                    className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                   >
-                    Opportunity Name
+                    Scenario Name
                   </label>
                   <input
                     id="deal-card-scenario-name"
@@ -1378,7 +1262,7 @@ export function DealDeskContent() {
                     type="text"
                     value={scenarioName}
                     onChange={(e) => setScenarioName(e.target.value)}
-                    placeholder="e.g. Trinity University - Aggressive Pilot"
+                    placeholder="e.g., University of Texas at Austin - Initial Deal Review"
                     className="h-10 w-full rounded border border-accent bg-background/50 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
                   />
                   {!scenarioName.trim() && (
@@ -1390,9 +1274,8 @@ export function DealDeskContent() {
 
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <div className="text-xs font-mono text-muted-foreground">DEAL CARD</div>
-                    <div className="mt-1 text-lg font-semibold">
-                      {universityName.trim() || "Untitled Opportunity"}
+                    <div className="text-lg font-semibold">
+                      {scenarioName.trim() || universityName.trim() || "Untitled Scenario"}
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <ZoneBadge zone={zone} />
@@ -1584,9 +1467,9 @@ export function DealDeskContent() {
 
         {/* Load Scenarios */}
         <section className="mt-10 rounded-2xl border border-accent bg-muted p-6">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold tracking-wide">Saved Scenarios</h2>
+              <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Saved Scenarios</h2>
               <p className="text-sm text-muted-foreground">
                 View or manage saved scenarios.
               </p>
@@ -1606,7 +1489,7 @@ export function DealDeskContent() {
                 disabled={loadingScenarios}
                 className="rounded border border-accent bg-muted px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/60 disabled:opacity-50"
               >
-                {loadingScenarios ? "REFRESHING..." : "REFRESH"}
+                {loadingScenarios ? "REFRESHING..." : "REFRESH DATABASE"}
               </button>
             </div>
           </div>
@@ -1634,6 +1517,8 @@ export function DealDeskContent() {
                   <th className="px-4 py-3">Zone</th>
                   <th className="px-4 py-3">Score</th>
                   <th className="px-4 py-3">TDV</th>
+                  <th className="px-4 py-3">Upfront Fee</th>
+                  <th className="px-4 py-3">Projected ARR</th>
                   <th className="px-4 py-3">Allocation</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
@@ -1641,7 +1526,7 @@ export function DealDeskContent() {
               <tbody className="divide-y divide-accent/40">
                 {scenarios.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-6 text-sm text-muted-foreground">
+                    <td colSpan={9} className="px-4 py-6 text-sm text-muted-foreground">
                       {loadingScenarios ? "Loading..." : "No saved scenarios yet."}
                     </td>
                   </tr>
@@ -1670,6 +1555,14 @@ export function DealDeskContent() {
                             canCompute: true,
                           }).score
                         : null;
+                    // Calculate upfront fee and projected ARR for saved scenarios
+                    const upfrontFee = tdv != null ? tdv * 0.1 : null;
+                    const investedPrincipal = tdv != null ? tdv * 0.9 : null;
+                    const interestRateDecimal = s.interest_rate != null ? s.interest_rate / 100 : null;
+                    const annualYield = investedPrincipal != null && interestRateDecimal != null ? investedPrincipal * interestRateDecimal : null;
+                    const yieldRatePercent = s.interest_rate ?? null;
+                    const shares = getYieldWaterfallShares(yieldRatePercent);
+                    const projectedArr = annualYield != null ? annualYield * shares.operatorShare : null;
                     return (
                       <tr key={s.id} className="hover:bg-background/40">
                         <td className="px-4 py-3 align-top">
@@ -1702,6 +1595,12 @@ export function DealDeskContent() {
                         </td>
                         <td className="px-4 py-3 align-top font-mono text-blue-400">
                           {tdv != null ? currency0.format(tdv) : "—"}
+                        </td>
+                        <td className="px-4 py-3 align-top font-mono text-blue-400">
+                          {upfrontFee != null ? currency0.format(upfrontFee) : "—"}
+                        </td>
+                        <td className="px-4 py-3 align-top font-mono text-blue-400">
+                          {projectedArr != null ? currency0.format(projectedArr) : "—"}
                         </td>
                         <td className="px-4 py-3 align-top font-mono">
                           {alloc != null ? percent2.format(alloc) : "—"}
