@@ -860,6 +860,13 @@ export async function submitAccessRequest(
     const supabase = getSupabaseService()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
+    const apiKey = process.env.RESEND_API_KEY
+    const toEmail = process.env.ACCESS_REQUEST_EMAIL
+    if (!apiKey?.trim() || !toEmail?.trim()) {
+      console.error('[submitAccessRequest] Missing RESEND_API_KEY or ACCESS_REQUEST_EMAIL')
+      return { success: false, error: 'Request access is temporarily unavailable. Please try again later or contact support.' }
+    }
+
     const { error: insertError } = await supabase.from('access_requests').insert({
       name,
       email,
@@ -868,24 +875,24 @@ export async function submitAccessRequest(
     })
     if (insertError) {
       console.error('[submitAccessRequest] Insert error:', insertError.message)
-      return { success: false, error: 'Could not submit request. Please try again.' }
+      const isDev = process.env.NODE_ENV === 'development'
+      return {
+        success: false,
+        error: isDev ? insertError.message : 'Could not submit request. Please try again.',
+      }
     }
 
-    const apiKey = process.env.RESEND_API_KEY
-    const toEmail = process.env.ACCESS_REQUEST_EMAIL
     const fromEmail = process.env.RESEND_FROM ?? 'onboarding@resend.dev'
-    if (apiKey && toEmail) {
-      const resend = new Resend(apiKey)
-      const { error: emailError } = await resend.emails.send({
-        from: fromEmail,
-        to: toEmail,
-        subject: `Access request: ${name} (${email})`,
-        text: `Name: ${name}\nEmail: ${email}\nInstitution: ${institution ?? '(none)'}\nMessage: ${message ?? '(none)'}`,
-      })
-      if (emailError) {
-        console.error('[submitAccessRequest] Resend error:', emailError.message)
-        return { success: false, error: 'Request saved but email failed. Please try again or contact support.' }
-      }
+    const resend = new Resend(apiKey)
+    const { error: emailError } = await resend.emails.send({
+      from: fromEmail,
+      to: toEmail,
+      subject: `Access request: ${name} (${email})`,
+      text: `Name: ${name}\nEmail: ${email}\nInstitution: ${institution ?? '(none)'}\nMessage: ${message ?? '(none)'}`,
+    })
+    if (emailError) {
+      console.error('[submitAccessRequest] Resend error:', emailError.message)
+      return { success: false, error: 'Request saved but email failed. Please try again or contact support.' }
     }
 
     return { success: true }
