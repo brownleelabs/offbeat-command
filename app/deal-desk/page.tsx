@@ -25,6 +25,8 @@ type DealScenarioRow = {
   redemption_velocity: number | null;
   interest_rate: number | null;
   calculated_tdv: number | null;
+  upfront_fee: number | null;
+  projected_arr: number | null;
   deal_zone: DealZone | null;
   score_explanation: string | null;
   deal_summary: string | null;
@@ -732,6 +734,8 @@ export function DealDeskContent() {
         // so existing dashboards and any new consumers can read it.
         tdv_amount: tdv,
         calculated_tdv: tdv,
+        upfront_fee: computed.upfrontFee,
+        projected_arr: computed.projectedArr,
         annual_student_welfare: annualStudentWelfare,
         annual_operator_revenue: annualOperatorRevenue,
         annual_principal_protection: annualPrincipalProtection,
@@ -1555,14 +1559,16 @@ export function DealDeskContent() {
                             canCompute: true,
                           }).score
                         : null;
-                    // Calculate upfront fee and projected ARR for saved scenarios
-                    const upfrontFee = tdv != null ? tdv * 0.1 : null;
-                    const investedPrincipal = tdv != null ? tdv * 0.9 : null;
-                    const interestRateDecimal = s.interest_rate != null ? s.interest_rate / 100 : null;
-                    const annualYield = investedPrincipal != null && interestRateDecimal != null ? investedPrincipal * interestRateDecimal : null;
-                    const yieldRatePercent = s.interest_rate ?? null;
-                    const shares = getYieldWaterfallShares(yieldRatePercent);
-                    const projectedArr = annualYield != null ? annualYield * shares.operatorShare : null;
+                    // Use saved upfront fee and projected ARR, with fallback to calculation for older records
+                    const upfrontFee = s.upfront_fee != null ? s.upfront_fee : (tdv != null ? tdv * 0.1 : null);
+                    const projectedArr = s.projected_arr != null ? s.projected_arr : (() => {
+                      const investedPrincipal = tdv != null ? tdv * 0.9 : null;
+                      const interestRateDecimal = s.interest_rate != null ? s.interest_rate / 100 : null;
+                      const annualYield = investedPrincipal != null && interestRateDecimal != null ? investedPrincipal * interestRateDecimal : null;
+                      const yieldRatePercent = s.interest_rate ?? null;
+                      const shares = getYieldWaterfallShares(yieldRatePercent);
+                      return annualYield != null ? annualYield * shares.operatorShare : null;
+                    })();
                     return (
                       <tr key={s.id} className="hover:bg-background/40">
                         <td className="px-4 py-3 align-top">
@@ -1648,6 +1654,16 @@ export function DealDeskContent() {
                   {typeof previewScenario.calculated_tdv === "number" && (
                     <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs font-mono text-blue-300">
                       TDV: {currency0.format(previewScenario.calculated_tdv)}
+                    </span>
+                  )}
+                  {typeof previewScenario.upfront_fee === "number" && (
+                    <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs font-mono text-blue-300">
+                      Upfront Fee: {currency0.format(previewScenario.upfront_fee)}
+                    </span>
+                  )}
+                  {typeof previewScenario.projected_arr === "number" && (
+                    <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-mono text-amber-300">
+                      Projected ARR: {currency0.format(previewScenario.projected_arr)}
                     </span>
                   )}
                   {typeof previewScenario.endowment_size === "number" &&
