@@ -160,7 +160,7 @@ export default function CampaignDetailPage() {
         prev ? { ...prev, name: name.trim(), questions: qs } : null
       );
     } else {
-      setSaveError(error.message);
+      setSaveError(error.message ?? "Failed to save campaign.");
     }
   }
 
@@ -183,11 +183,16 @@ export default function CampaignDetailPage() {
 
   async function confirmArchiveClick() {
     if (!id) return;
+    setSaveError("");
     const supabase = createClient();
-    const { count } = await supabase
+    const { count, error } = await supabase
       .from("tokens")
       .select("*", { count: "exact", head: true })
       .eq("campaign_id", id);
+    if (error) {
+      setSaveError(error.message ?? "Could not load token count. Try again before archiving.");
+      return;
+    }
     setAssignedTokenCount(count ?? 0);
     setConfirmDelete(true);
   }

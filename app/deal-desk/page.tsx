@@ -10,8 +10,15 @@ import {
   Users,
   XCircle,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase";
 import { useDashboard } from "@/components/dashboard-context";
+import {
+  archiveDealScenarios,
+  insertDealScenario,
+  listDealScenarios,
+  markDealScenarioViewed,
+  softDeleteDealScenarios,
+  updateDealScenarioPinned,
+} from "./scenario-actions";
 
 type DealZone = "GREEN" | "ORANGE" | "RED";
 
@@ -22,18 +29,46 @@ type DealScenarioRow = {
   endowment_size: number | null;
   student_enrollment: number | null;
   target_reach_percent: number | null;
+  target_students: number | null;
   redemption_velocity: number | null;
   interest_rate: number | null;
   calculated_tdv: number | null;
   upfront_fee: number | null;
   projected_arr: number | null;
+  /** Versioning / system-of-record */
+  scenario_group_id?: string | null;
+  version?: number | null;
+  /** Immutable scoring snapshot at save-time */
+  deal_score?: number | null;
+  deal_score_label?: string | null;
+  raw_economic_score?: number | null;
+  score_breakdown?: unknown | null; // jsonb
+  eps_at_save?: number | null;
+  allocation_at_save?: number | null;
+  fee_recoup_years_at_save?: number | null;
+  /** Yield/waterfall snapshot at save-time */
+  k_eff_at_save?: number | null;
+  yield_environment?: string | null; // NORMAL | STEADY | EFFICIENT | FREEZE | UNKNOWN
+  waterfall_shares?: unknown | null; // jsonb
+  /** Scenario metadata */
+  tags?: string[] | null;
+  notes?: string | null;
+  owner_user_id?: string | null;
+  last_viewed_at?: string | null;
+  /** Governance */
+  pinned?: boolean | null;
+  pinned_at?: string | null;
+  pinned_by?: string | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
   deal_zone: DealZone | null;
   score_explanation: string | null;
   deal_summary: string | null;
   created_at?: string | null;
 };
 
-const EFFICIENCY_CONSTANT = 0.567;
 const ACADEMIC_MONTHS = 9;
 const TOKEN_VALUE = 25;
 
@@ -110,6 +145,27 @@ function safeNumber(v: unknown): number | null {
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
+}
+
+function newUuid(): string {
+  // Browser-safe UUID generation with fallback.
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  // RFC4122-ish fallback (non-crypto); acceptable for client grouping only.
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function getYieldEnvironment(yieldRatePercent: number | null): "NORMAL" | "STEADY" | "EFFICIENT" | "FREEZE" | "UNKNOWN" {
+  if (yieldRatePercent == null || !Number.isFinite(yieldRatePercent)) return "UNKNOWN";
+  if (yieldRatePercent < 0.1) return "FREEZE";
+  if (yieldRatePercent < 1.5) return "EFFICIENT";
+  if (yieldRatePercent < 2.0) return "STEADY";
+  return "NORMAL";
 }
 
 function computeZone(eps: number | null, allocation: number | null): DealZone | null {
@@ -410,9 +466,9 @@ function ZoneBadge({ zone }: { zone: DealZone | null }) {
 
 export function DealDeskContent() {
   const { userRole, loading: authLoading } = useDashboard();
-  const supabase = useMemo(() => createClient(), []);
 
   const [scenarioId, setScenarioId] = useState<string | null>(null);
+  const [scenarioGroupId, setScenarioGroupId] = useState<string | null>(null);
   const [scenarioName, setScenarioName] = useState<string>("");
   const [universityName, setUniversityName] = useState<string>("");
   const [endowmentSize, setEndowmentSize] = useState<number>(2_000_000_000); // $2.0B baseline (ideal target)
@@ -420,6 +476,8 @@ export function DealDeskContent() {
   const [targetReachPercent, setTargetReachPercent] = useState<number>(20);
   const [redemptionVelocity, setRedemptionVelocity] = useState<number>(1.0);
   const [interestRate, setInterestRate] = useState<number>(3.60);
+  const [scenarioTagsInput, setScenarioTagsInput] = useState<string>("");
+  const [scenarioNotes, setScenarioNotes] = useState<string>("");
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>("");
@@ -428,10 +486,47 @@ export function DealDeskContent() {
   const [scenarios, setScenarios] = useState<DealScenarioRow[]>([]);
   const [loadingScenarios, setLoadingScenarios] = useState(false);
   const [loadError, setLoadError] = useState<string>("");
+  const [scenarioTotal, setScenarioTotal] = useState<number>(0);
+  const [scenarioPage, setScenarioPage] = useState<number>(1);
+  const [scenarioPageSize, setScenarioPageSize] = useState<number>(50);
   const [selectedScenarioIds, setSelectedScenarioIds] = useState<Set<string>>(new Set());
   const [deletingScenarios, setDeletingScenarios] = useState(false);
   const [deleteError, setDeleteError] = useState<string>("");
   const [previewScenario, setPreviewScenario] = useState<DealScenarioRow | null>(null);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [pinError, setPinError] = useState<string>("");
+  const loadRequestIdRef = useRef(0);
+  const filterDepsRef = useRef({ debouncedSearchQuery, showArchived, showDeleted, scenarioPageSize });
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchQuery(searchQuery.trim()), 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // Any change in query filters resets pagination to page 1.
+  useEffect(() => {
+    if (userRole !== "SUPER_ADMIN") return;
+    setScenarioPage(1);
+  }, [userRole, debouncedSearchQuery, showArchived, showDeleted, scenarioPageSize]);
+
+  // Load the current page. When filters change, request page 1 (avoid stale page from closure).
+  useEffect(() => {
+    if (userRole !== "SUPER_ADMIN") return;
+    const filtersChanged =
+      filterDepsRef.current.debouncedSearchQuery !== debouncedSearchQuery ||
+      filterDepsRef.current.showArchived !== showArchived ||
+      filterDepsRef.current.showDeleted !== showDeleted ||
+      filterDepsRef.current.scenarioPageSize !== scenarioPageSize;
+    if (filtersChanged) {
+      filterDepsRef.current = { debouncedSearchQuery, showArchived, showDeleted, scenarioPageSize };
+    }
+    loadScenarios(filtersChanged ? 1 : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRole, scenarioPage, scenarioPageSize, debouncedSearchQuery, showArchived, showDeleted]);
 
   const computed = useMemo(() => {
     const E = safeNumber(endowmentSize);
@@ -538,36 +633,75 @@ export function DealDeskContent() {
     };
   }, [endowmentSize, interestRate, redemptionVelocity, studentEnrollment, targetReachPercent]);
 
-  async function loadScenarios() {
+  async function loadScenarios(overridePage?: number) {
+    const requestId = ++loadRequestIdRef.current;
+    const pageToLoad = overridePage ?? scenarioPage;
     setLoadingScenarios(true);
     setLoadError("");
     setDeleteError("");
+    setPinError("");
     try {
-      // created_at may or may not exist; avoid hard-failing if it doesn't
-      const first = await supabase
-        .from("deal_scenarios")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(50);
+      const res = await listDealScenarios<DealScenarioRow>({
+        page: pageToLoad,
+        pageSize: scenarioPageSize,
+        searchQuery: debouncedSearchQuery,
+        showArchived,
+        showDeleted,
+      });
 
-      if (first.error) {
-        const fallback = await supabase.from("deal_scenarios").select("*").limit(50);
-        if (fallback.error) {
-          setLoadError(fallback.error.message);
+      if (loadRequestIdRef.current !== requestId) return;
+      if (!res.success) {
+        setLoadError(res.error);
+        setScenarios([]);
+        setScenarioTotal(0);
+        return;
+      }
+
+      const total = res.total ?? 0;
+      const maxPage = Math.max(1, Math.ceil(total / scenarioPageSize));
+      if (pageToLoad > maxPage) {
+        const res2 = await listDealScenarios<DealScenarioRow>({
+          page: maxPage,
+          pageSize: scenarioPageSize,
+          searchQuery: debouncedSearchQuery,
+          showArchived,
+          showDeleted,
+        });
+        if (loadRequestIdRef.current !== requestId) return;
+        if (!res2.success) {
+          setLoadError(res2.error);
           setScenarios([]);
-        } else {
-          setScenarios((fallback.data as DealScenarioRow[]) ?? []);
+          setScenarioTotal(0);
+          return;
         }
+        setScenarioPage(maxPage);
+        setScenarios(res2.rows ?? []);
+        setScenarioTotal(res2.total ?? 0);
       } else {
-        setScenarios((first.data as DealScenarioRow[]) ?? []);
+        setScenarios(res.rows ?? []);
+        setScenarioTotal(total);
       }
     } catch (err) {
+      if (loadRequestIdRef.current !== requestId) return;
       setLoadError(err instanceof Error ? err.message : "Failed to load scenarios.");
       setScenarios([]);
+      setScenarioTotal(0);
     } finally {
-      setLoadingScenarios(false);
+      if (loadRequestIdRef.current === requestId) setLoadingScenarios(false);
     }
   }
+
+  // All filtering/searching happens server-side now; the UI operates on the current page.
+  const visibleScenarios = scenarios;
+
+  const visibleScenarioIds = useMemo(() => new Set(visibleScenarios.map((s) => s.id)), [visibleScenarios]);
+
+  // Safety: actions should apply to what the user can currently see.
+  // This prevents “hidden selections” after you change search/toggles.
+  const selectedVisibleIds = useMemo(() => {
+    const ids = Array.from(selectedScenarioIds).filter((id) => visibleScenarioIds.has(id));
+    return new Set(ids);
+  }, [selectedScenarioIds, visibleScenarioIds]);
 
   function toggleScenarioSelection(id: string) {
     setSelectedScenarioIds((prev) => {
@@ -580,23 +714,27 @@ export function DealDeskContent() {
 
   function toggleAllScenarios(checked: boolean) {
     if (checked) {
-      setSelectedScenarioIds(new Set(scenarios.map((s) => s.id)));
+      setSelectedScenarioIds(new Set(visibleScenarios.map((s) => s.id)));
     } else {
       setSelectedScenarioIds(new Set());
     }
   }
 
   async function deleteSelectedScenarios() {
-    if (selectedScenarioIds.size === 0) return;
+    if (selectedVisibleIds.size === 0) return;
     setDeletingScenarios(true);
     setDeleteError("");
     try {
-      const ids = Array.from(selectedScenarioIds);
-      const { error } = await supabase.from("deal_scenarios").delete().in("id", ids);
-      if (error) {
-        setDeleteError(error.message);
+      const ids = Array.from(selectedVisibleIds);
+      // Soft delete (system of record): keep rows, hide by default.
+      const res = await softDeleteDealScenarios(ids, true);
+      if (!res.success) {
+        setDeleteError(res.error);
         return;
       }
+      // Keep the affected rows visible after the action.
+      setShowDeleted(true);
+      setShowArchived(false);
       setSelectedScenarioIds(new Set());
       await loadScenarios();
     } catch (err) {
@@ -606,14 +744,99 @@ export function DealDeskContent() {
     }
   }
 
-  useEffect(() => {
-    if (userRole !== "SUPER_ADMIN") return;
-    loadScenarios();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userRole]);
+  async function archiveSelectedScenarios() {
+    if (selectedVisibleIds.size === 0) return;
+    setDeletingScenarios(true);
+    setDeleteError("");
+    try {
+      const ids = Array.from(selectedVisibleIds);
+      // Archiving and deleting are mutually exclusive states:
+      // - Archive clears deleted flags (so "Show archived" reliably reveals it)
+      const res = await archiveDealScenarios(ids, true);
+      if (!res.success) {
+        setDeleteError(res.error);
+        return;
+      }
+      // Keep the affected rows visible after the action.
+      setShowArchived(true);
+      setShowDeleted(false);
+      setSelectedScenarioIds(new Set());
+      await loadScenarios();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to archive scenarios.");
+    } finally {
+      setDeletingScenarios(false);
+    }
+  }
+
+  async function restoreSelectedScenarios() {
+    if (selectedVisibleIds.size === 0) return;
+    setDeletingScenarios(true);
+    setDeleteError("");
+    try {
+      const ids = Array.from(selectedVisibleIds);
+      const res = await softDeleteDealScenarios(ids, false);
+      if (!res.success) {
+        setDeleteError(res.error);
+        return;
+      }
+      setShowDeleted(false);
+      setSelectedScenarioIds(new Set());
+      await loadScenarios();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to restore scenarios.");
+    } finally {
+      setDeletingScenarios(false);
+    }
+  }
+
+  async function unarchiveSelectedScenarios() {
+    if (selectedVisibleIds.size === 0) return;
+    setDeletingScenarios(true);
+    setDeleteError("");
+    try {
+      const ids = Array.from(selectedVisibleIds);
+      const res = await archiveDealScenarios(ids, false);
+      if (!res.success) {
+        setDeleteError(res.error);
+        return;
+      }
+      setShowArchived(false);
+      setSelectedScenarioIds(new Set());
+      await loadScenarios();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to unarchive scenarios.");
+    } finally {
+      setDeletingScenarios(false);
+    }
+  }
+
+  async function togglePinnedScenario(row: DealScenarioRow) {
+    setPinError("");
+    try {
+      const nextPinned = !(row.pinned ?? false);
+      const res = await updateDealScenarioPinned(row.id, nextPinned);
+      if (!res.success) {
+        setPinError(res.error);
+        return;
+      }
+      await loadScenarios();
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message : "Pin update failed.");
+    }
+  }
+
+  async function markScenarioViewed(row: DealScenarioRow) {
+    try {
+      await markDealScenarioViewed(row.id);
+    } catch {
+      // ignore
+    }
+  }
 
   function resetDraft() {
     setScenarioId(null);
+    setScenarioGroupId(null);
     setScenarioName("");
     setUniversityName("");
     setEndowmentSize(2_000_000_000);
@@ -621,12 +844,15 @@ export function DealDeskContent() {
     setTargetReachPercent(20);
     setRedemptionVelocity(1.0);
     setInterestRate(3.60);
+    setScenarioTagsInput("");
+    setScenarioNotes("");
     setSaveError("");
     setSaved(false);
   }
 
   function loadScenario(row: DealScenarioRow) {
     setScenarioId(row.id ?? null);
+    setScenarioGroupId(row.scenario_group_id ?? null);
     setScenarioName(row.name ?? "");
     setUniversityName(row.university_name ?? "");
     setEndowmentSize(Number(row.endowment_size ?? 0) || 0);
@@ -634,6 +860,32 @@ export function DealDeskContent() {
     setTargetReachPercent(Number(row.target_reach_percent ?? 20) || 0);
     setRedemptionVelocity(Number(row.redemption_velocity ?? 1.0) || 0);
     setInterestRate(Number(row.interest_rate ?? 3.60) || 0);
+    setScenarioTagsInput((row.tags ?? []).join(", "));
+    setScenarioNotes(row.notes ?? "");
+    setSaveError("");
+    setSaved(false);
+  }
+
+  function duplicateScenarioIntoDraft(row: DealScenarioRow) {
+    // Duplicate should always create a new record on save (we already do immutable inserts).
+    // Keep the group id to create a clean version chain, unless missing (then create one).
+    setScenarioId(null);
+    setScenarioGroupId(row.scenario_group_id ?? newUuid());
+    setScenarioName(
+      row.name
+        ? `${row.name} — Iteration`
+        : row.university_name
+          ? `${row.university_name} — Iteration`
+          : ""
+    );
+    setUniversityName(row.university_name ?? "");
+    setEndowmentSize(Number(row.endowment_size ?? 0) || 0);
+    setStudentEnrollment(Number(row.student_enrollment ?? 0) || 0);
+    setTargetReachPercent(Number(row.target_reach_percent ?? 20) || 0);
+    setRedemptionVelocity(Number(row.redemption_velocity ?? 1.0) || 0);
+    setInterestRate(Number(row.interest_rate ?? 3.60) || 0);
+    setScenarioTagsInput((row.tags ?? []).join(", "));
+    setScenarioNotes(row.notes ?? "");
     setSaveError("");
     setSaved(false);
   }
@@ -673,6 +925,9 @@ export function DealDeskContent() {
       const finalName =
         scenarioName.trim() ||
         `${universityName.trim() || "University"} Deal - ${new Date().toLocaleDateString()}`;
+
+      // Group/version: each save is immutable; group_id ties versions together.
+      const finalGroupId = scenarioGroupId ?? newUuid();
 
       // Required DB fields:
       // - target_students (Students Expected to Participate)
@@ -716,6 +971,11 @@ export function DealDeskContent() {
       // Generate deal summary text for saving
       const dealSummaryText = generateDealSummaryText();
 
+      const tags = scenarioTagsInput
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+
       const payload = {
         name: finalName,
         // snake_case DB columns
@@ -736,6 +996,24 @@ export function DealDeskContent() {
         calculated_tdv: tdv,
         upfront_fee: computed.upfrontFee,
         projected_arr: computed.projectedArr,
+        // system-of-record grouping/versioning
+        scenario_group_id: finalGroupId,
+        // scoring snapshot (immutable)
+        deal_score: dealScore.score,
+        deal_score_label: dealScore.label,
+        raw_economic_score: dealScore.rawEconomicScore,
+        score_breakdown: dealScore.breakdown,
+        eps_at_save: computed.eps,
+        allocation_at_save: computed.allocation,
+        fee_recoup_years_at_save: computed.feeRecoupYears,
+        // yield/waterfall snapshot (immutable)
+        k_eff_at_save: computed.kEff,
+        yield_environment: getYieldEnvironment(interestRate),
+        waterfall_shares: computed.shares,
+        // scenario metadata
+        tags: tags.length ? tags : null,
+        notes: scenarioNotes.trim() ? scenarioNotes.trim() : null,
+        pinned: false,
         annual_student_welfare: annualStudentWelfare,
         annual_operator_revenue: annualOperatorRevenue,
         annual_principal_protection: annualPrincipalProtection,
@@ -745,29 +1023,19 @@ export function DealDeskContent() {
         deal_summary: dealSummaryText,
       };
 
-      const { data, error } = await supabase
-        .from("deal_scenarios")
-        .insert(payload)
-        .select("id")
-        .single();
-
-      if (error) {
-        const errorMsg = `Database error: ${error.message}`;
+      const res = await insertDealScenario(payload as Record<string, unknown>);
+      if (!res.success) {
+        const errorMsg = `Database error: ${res.error}`;
         setSaveError(errorMsg);
-        // Log serializable details (Supabase error doesn't stringify as {} in console)
-        console.error("[Deal Desk] Save error:", {
-          message: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint,
-        });
+        console.error("[Deal Desk] Save error:", errorMsg);
         alert(errorMsg);
         return;
       }
 
       // Use the freshly created row's id (if returned) as the current in-memory scenario id.
       // This is mainly for UI consistency; every save still creates a new immutable record.
-      setScenarioId((data as { id?: string } | null)?.id ?? null);
+      setScenarioId(res.id ?? null);
+      setScenarioGroupId(finalGroupId);
       setSaved(true);
       setScenarioName(""); // Clear the name field after successful save
       await loadScenarios();
@@ -844,6 +1112,10 @@ export function DealDeskContent() {
     });
   }, [zone, computed.eps, computed.allocation, computed.feeRecoupYears, computed.tdv, computed.E, canCompute]);
 
+  const scenarioPageCount = Math.max(1, Math.ceil(scenarioTotal / scenarioPageSize));
+  const scenarioShowingFrom = scenarioTotal === 0 ? 0 : (scenarioPage - 1) * scenarioPageSize + 1;
+  const scenarioShowingTo = Math.min(scenarioTotal, scenarioPage * scenarioPageSize);
+
   const dealScoreClass =
     dealScore.score >= 90
       ? "text-success"
@@ -869,6 +1141,111 @@ export function DealDeskContent() {
       rawEconomicScore: dealScore.rawEconomicScore,
     });
   }, [zone, computed.eps, computed.allocation, computed.feeRecoupYears, computed.tdv, computed.E, dealScore.breakdown, dealScore.score, dealScore.rawEconomicScore]);
+
+  // Derived metrics for the saved-scenario preview modal (non-mutating).
+  // Prefer persisted columns, but keep fallbacks for older rows.
+  const previewDerived = useMemo(() => {
+    if (!previewScenario) return null;
+
+    const E = safeNumber(previewScenario.endowment_size);
+    const T = safeNumber(previewScenario.student_enrollment);
+    const tdv = safeNumber(previewScenario.calculated_tdv);
+
+    const alloc = tdv != null && E != null && E > 0 ? tdv / E : null;
+    const eps = E != null && T != null && T > 0 ? E / T : null;
+
+    const upfrontFee =
+      previewScenario.upfront_fee != null
+        ? previewScenario.upfront_fee
+        : tdv != null
+          ? tdv * 0.1
+          : null;
+
+    const ipct = safeNumber(previewScenario.interest_rate);
+    const i = ipct != null ? ipct / 100 : null;
+    const shares = getYieldWaterfallShares(ipct);
+
+    const investedPrincipal = tdv != null ? tdv * 0.9 : null;
+    const annualYield =
+      investedPrincipal != null && i != null ? investedPrincipal * i : null;
+
+    const projectedArr =
+      previewScenario.projected_arr != null
+        ? previewScenario.projected_arr
+        : annualYield != null
+          ? annualYield * shares.operatorShare
+          : null;
+
+    const feeRecoupYears =
+      ipct != null && ipct > 0 ? 1 / (ACADEMIC_MONTHS * (ipct / 100)) : null;
+
+    const canComputePreview =
+      (previewScenario.deal_zone ?? null) != null &&
+      eps != null &&
+      alloc != null &&
+      feeRecoupYears != null &&
+      tdv != null &&
+      E != null;
+
+    const computedScore = canComputePreview
+      ? computeDealScore({
+          zone: previewScenario.deal_zone ?? null,
+          eps,
+          allocation: alloc,
+          feeRecoupYears,
+          tdv,
+          endowment: E,
+          canCompute: true,
+        })
+      : null;
+
+    // Prefer persisted snapshot if present (model evolves; record should remain explainable).
+    const dealScore =
+      previewScenario.deal_score != null
+        ? {
+            score: Math.round(previewScenario.deal_score),
+            rawEconomicScore:
+              previewScenario.raw_economic_score != null
+                ? Math.round(previewScenario.raw_economic_score)
+                : computedScore?.rawEconomicScore ?? 1,
+            label: previewScenario.deal_score_label ?? computedScore?.label ?? "MODEL INCOMPLETE",
+          }
+        : computedScore;
+
+    const dealScoreClass =
+      dealScore == null
+        ? "text-muted-foreground"
+        : dealScore.score >= 90
+          ? "text-success"
+          : dealScore.score >= 75
+            ? "text-blue-400"
+            : dealScore.score >= 55
+              ? "text-amber-400"
+              : "text-destructive";
+
+    const zoneStatus =
+      previewScenario.deal_zone === "GREEN"
+        ? "pursue"
+        : previewScenario.deal_zone === "ORANGE"
+          ? "consider"
+          : previewScenario.deal_zone === "RED"
+            ? "not fit"
+            : "incomplete";
+
+    const feeRecoupIsLong = feeRecoupYears != null ? feeRecoupYears > 10 : false;
+
+    return {
+      tdv,
+      alloc,
+      upfrontFee,
+      projectedArr,
+      feeRecoupYears,
+      feeRecoupIsLong,
+      dealScore,
+      dealScoreClass,
+      zoneStatus,
+    };
+  }, [previewScenario]);
 
   /**
    * Generate deal summary as plain text (for saving to database)
@@ -1218,6 +1595,49 @@ export function DealDeskContent() {
                 </div>
               </div>
 
+              <div className="mt-6 rounded-xl border border-accent/40 bg-background/20 p-4">
+                <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Scenario metadata
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label
+                      htmlFor="scenario-tags"
+                      className="mb-1 block text-xs text-muted-foreground"
+                    >
+                      Tags
+                    </label>
+                    <input
+                      id="scenario-tags"
+                      name="scenarioTags"
+                      value={scenarioTagsInput}
+                      onChange={(e) => setScenarioTagsInput(e.target.value)}
+                      placeholder="e.g., board-vote, pilot, salvageable"
+                      className="h-10 w-full rounded border border-accent bg-background/50 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <div className="mt-1 text-xs text-muted-foreground/80">
+                      Comma-separated. Saved with the scenario record.
+                    </div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label
+                      htmlFor="scenario-notes"
+                      className="mb-1 block text-xs text-muted-foreground"
+                    >
+                      Notes
+                    </label>
+                    <textarea
+                      id="scenario-notes"
+                      name="scenarioNotes"
+                      value={scenarioNotes}
+                      onChange={(e) => setScenarioNotes(e.target.value)}
+                      placeholder="Optional context for future you (why we saved this, next steps, objections, etc.)"
+                      className="min-h-[84px] w-full resize-y rounded border border-accent bg-background/50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                </div>
+              </div>
+
               {saveError && (
                 <p className="mt-4 text-sm text-destructive">{saveError}</p>
               )}
@@ -1471,22 +1891,75 @@ export function DealDeskContent() {
 
         {/* Load Scenarios */}
         <section className="mt-10 rounded-2xl border border-accent bg-muted p-6">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
               <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Saved Scenarios</h2>
               <p className="text-sm text-muted-foreground">
                 View or manage saved scenarios.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search name, institution, tags, id…"
+                className="h-9 w-72 max-w-full rounded border border-accent bg-background/50 px-3 text-xs outline-none focus:ring-2 focus:ring-primary/20"
+              />
+              <label className="inline-flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={showArchived}
+                  onChange={(e) => setShowArchived(e.target.checked)}
+                  className="h-4 w-4 rounded border-accent"
+                />
+                Show archived
+              </label>
+              <label className="inline-flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={showDeleted}
+                  onChange={(e) => setShowDeleted(e.target.checked)}
+                  className="h-4 w-4 rounded border-accent"
+                />
+                Show deleted
+              </label>
+
+              <button
+                type="button"
+                onClick={archiveSelectedScenarios}
+                disabled={deletingScenarios || selectedVisibleIds.size === 0}
+                className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-mono text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+              >
+                {deletingScenarios ? "ARCHIVING..." : "ARCHIVE SELECTED"}
+              </button>
               <button
                 type="button"
                 onClick={deleteSelectedScenarios}
-                disabled={deletingScenarios || selectedScenarioIds.size === 0}
+                disabled={deletingScenarios || selectedVisibleIds.size === 0}
                 className="rounded border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs font-mono text-destructive hover:bg-destructive/20 disabled:opacity-50"
               >
-                {deletingScenarios ? "DELETING..." : "DELETE SELECTED"}
+                {deletingScenarios ? "DELETING..." : "SOFT DELETE"}
               </button>
+              {showDeleted && (
+                <button
+                  type="button"
+                  onClick={restoreSelectedScenarios}
+                  disabled={deletingScenarios || selectedVisibleIds.size === 0}
+                  className="rounded border border-success/40 bg-success/10 px-3 py-2 text-xs font-mono text-success hover:bg-success/20 disabled:opacity-50"
+                >
+                  {deletingScenarios ? "RESTORING..." : "RESTORE SELECTED"}
+                </button>
+              )}
+              {showArchived && (
+                <button
+                  type="button"
+                  onClick={unarchiveSelectedScenarios}
+                  disabled={deletingScenarios || selectedVisibleIds.size === 0}
+                  className="rounded border border-success/40 bg-success/10 px-3 py-2 text-xs font-mono text-success hover:bg-success/20 disabled:opacity-50"
+                >
+                  {deletingScenarios ? "UNARCHIVING..." : "UNARCHIVE SELECTED"}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={loadScenarios}
@@ -1499,7 +1972,58 @@ export function DealDeskContent() {
           </div>
 
           {loadError && <p className="mb-2 text-sm text-destructive">{loadError}</p>}
-          {deleteError && <p className="mb-4 text-sm text-destructive">{deleteError}</p>}
+          {deleteError && <p className="mb-2 text-sm text-destructive">{deleteError}</p>}
+          {pinError && <p className="mb-4 text-sm text-destructive">{pinError}</p>}
+
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/60 bg-background/20 px-4 py-3">
+            <div className="text-xs text-muted-foreground">
+              {scenarioTotal > 0 ? (
+                <>
+                  Showing{" "}
+                  <span className="font-mono text-foreground">
+                    {scenarioShowingFrom}–{scenarioShowingTo}
+                  </span>{" "}
+                  of <span className="font-mono text-foreground">{scenarioTotal}</span>
+                </>
+              ) : (
+                <>0 scenarios</>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                Rows
+                <select
+                  value={scenarioPageSize}
+                  onChange={(e) => setScenarioPageSize(Number(e.target.value) || 50)}
+                  className="h-7 rounded border border-accent bg-background/60 px-2 font-mono text-xs text-foreground outline-none"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => setScenarioPage((p) => Math.max(1, p - 1))}
+                disabled={loadingScenarios || scenarioPage <= 1}
+                className="rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80 disabled:opacity-50"
+              >
+                PREV
+              </button>
+              <div className="rounded border border-accent bg-background/40 px-3 py-2 text-xs font-mono text-muted-foreground">
+                Page <span className="text-foreground">{scenarioPage}</span> /{" "}
+                <span className="text-foreground">{scenarioPageCount}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScenarioPage((p) => Math.min(scenarioPageCount, p + 1))}
+                disabled={loadingScenarios || scenarioPage >= scenarioPageCount}
+                className="rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80 disabled:opacity-50"
+              >
+                NEXT
+              </button>
+            </div>
+          </div>
 
           <div className="overflow-hidden rounded-xl border border-accent/60">
             <table className="w-full text-left text-sm">
@@ -1510,8 +2034,9 @@ export function DealDeskContent() {
                       type="checkbox"
                       aria-label="Select all scenarios"
                       checked={
-                        scenarios.length > 0 &&
-                        selectedScenarioIds.size === scenarios.length
+                        visibleScenarios.length > 0 &&
+                        selectedVisibleIds.size > 0 &&
+                        selectedVisibleIds.size === visibleScenarios.length
                       }
                       onChange={(e) => toggleAllScenarios(e.target.checked)}
                       className="h-4 w-4 rounded border-accent"
@@ -1528,14 +2053,14 @@ export function DealDeskContent() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-accent/40">
-                {scenarios.length === 0 ? (
+                {visibleScenarios.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="px-4 py-6 text-sm text-muted-foreground">
-                      {loadingScenarios ? "Loading..." : "No saved scenarios yet."}
+                      {loadingScenarios ? "Loading..." : "No matching scenarios."}
                     </td>
                   </tr>
                 ) : (
-                  scenarios.map((s) => {
+                  visibleScenarios.map((s) => {
                     const E = safeNumber(s.endowment_size);
                     const T = safeNumber(s.student_enrollment);
                     const tdv = safeNumber(s.calculated_tdv);
@@ -1582,22 +2107,64 @@ export function DealDeskContent() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="font-semibold">
-                            {s.name || s.university_name || "—"}
+                            <span className="inline-flex items-center gap-2">
+                              {s.pinned && (
+                                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-mono text-amber-300">
+                                  PINNED
+                                </span>
+                              )}
+                              {s.name || s.university_name || "—"}
+                            </span>
                           </div>
                           {s.name && s.university_name && (
                             <div className="text-xs text-muted-foreground">
                               {s.university_name}
                             </div>
                           )}
+                          {(s.version != null || s.scenario_group_id != null) && (
+                            <div className="text-xs text-muted-foreground">
+                              {s.version != null ? (
+                                <span className="font-mono">v{s.version}</span>
+                              ) : (
+                                <span className="font-mono">v—</span>
+                              )}
+                              {s.scenario_group_id ? (
+                                <span className="ml-2 font-mono text-muted-foreground/80">
+                                  group: {String(s.scenario_group_id).slice(0, 8)}…
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
                           <div className="text-xs font-mono text-muted-foreground">
                             id: {s.id.slice(0, 8)}…
                           </div>
+                          {s.tags && s.tags.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {s.tags.slice(0, 4).map((t) => (
+                                <span
+                                  key={t}
+                                  className="rounded bg-background/40 px-2 py-0.5 text-[10px] text-muted-foreground"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                              {s.tags.length > 4 && (
+                                <span className="rounded bg-background/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+                                  +{s.tags.length - 4}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 align-top">
                           <ZonePill zone={s.deal_zone ?? null} />
                         </td>
                         <td className="px-4 py-3 align-top font-mono">
-                          {savedScore != null ? `${savedScore}/100` : "—"}
+                          {s.deal_score != null
+                            ? `${Math.round(s.deal_score)}/100`
+                            : savedScore != null
+                              ? `${savedScore}/100`
+                              : "—"}
                         </td>
                         <td className="px-4 py-3 align-top font-mono text-blue-400">
                           {tdv != null ? currency0.format(tdv) : "—"}
@@ -1612,13 +2179,28 @@ export function DealDeskContent() {
                           {alloc != null ? percent2.format(alloc) : "—"}
                         </td>
                         <td className="px-4 py-3 align-top text-right">
-                          <button
-                            type="button"
-                            onClick={() => setPreviewScenario(s)}
-                            className="rounded border border-accent bg-background px-3 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80"
-                          >
-                            VIEW
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => togglePinnedScenario(s)}
+                              className="rounded border border-accent bg-background px-2 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80"
+                              aria-label={s.pinned ? "Unpin scenario" : "Pin scenario"}
+                              title={s.pinned ? "Unpin" : "Pin"}
+                            >
+                              {s.pinned ? "★" : "☆"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markScenarioViewed(s);
+                                setCompareOpen(false);
+                                setPreviewScenario(s);
+                              }}
+                              className="rounded border border-accent bg-background px-3 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80"
+                            >
+                              VIEW
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1631,7 +2213,7 @@ export function DealDeskContent() {
         {previewScenario && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-8">
             <div className="flex h-full max-h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-accent bg-muted shadow-2xl">
-              {/* Header: Title | Badges | Close */}
+              {/* Header: Title | Close */}
               <div className="flex items-center gap-4 border-b border-accent/40 p-6">
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-mono text-muted-foreground">
@@ -1649,37 +2231,12 @@ export function DealDeskContent() {
                     id: {previewScenario.id}
                   </p>
                 </div>
-                <div className="flex shrink-0 flex-wrap items-center justify-center gap-2">
-                  <ZoneBadge zone={previewScenario.deal_zone ?? null} />
-                  {typeof previewScenario.calculated_tdv === "number" && (
-                    <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs font-mono text-blue-300">
-                      TDV: {currency0.format(previewScenario.calculated_tdv)}
-                    </span>
-                  )}
-                  {typeof previewScenario.upfront_fee === "number" && (
-                    <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs font-mono text-blue-300">
-                      Upfront Fee: {currency0.format(previewScenario.upfront_fee)}
-                    </span>
-                  )}
-                  {typeof previewScenario.projected_arr === "number" && (
-                    <span className="rounded-full bg-amber-500/10 px-3 py-1 text-xs font-mono text-amber-300">
-                      Projected ARR: {currency0.format(previewScenario.projected_arr)}
-                    </span>
-                  )}
-                  {typeof previewScenario.endowment_size === "number" &&
-                    typeof previewScenario.calculated_tdv === "number" &&
-                    previewScenario.endowment_size > 0 && (
-                      <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-mono text-emerald-300">
-                        Allocation:{" "}
-                        {percent2.format(
-                          previewScenario.calculated_tdv / previewScenario.endowment_size
-                        )}
-                      </span>
-                    )}
-                </div>
                 <button
                   type="button"
-                  onClick={() => setPreviewScenario(null)}
+                  onClick={() => {
+                    setCompareOpen(false);
+                    setPreviewScenario(null);
+                  }}
                   className="shrink-0 rounded-full border border-accent bg-background px-3 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80"
                 >
                   CLOSE
@@ -1759,12 +2316,229 @@ export function DealDeskContent() {
                         </p>
                       </div>
                     )}
+
+                    {/* Key KPIs (persisted + derived): 2 rows of 3 */}
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-3">
+                        <div className="text-xs text-muted-foreground">TDV</div>
+                        <div className="mt-1 font-mono font-semibold text-blue-400">
+                          {previewDerived?.tdv != null ? currency0.format(previewDerived.tdv) : "—"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-3">
+                        <div className="text-xs text-muted-foreground">Upfront Fee (10%)</div>
+                        <div className="mt-1 font-mono font-semibold text-blue-400">
+                          {previewDerived?.upfrontFee != null
+                            ? currency0.format(previewDerived.upfrontFee)
+                            : "—"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-3">
+                        <div className="text-xs text-muted-foreground">Projected ARR (Operator)</div>
+                        <div className="mt-1 font-mono font-semibold text-amber-400">
+                          {previewDerived?.projectedArr != null
+                            ? currency0.format(previewDerived.projectedArr)
+                            : "—"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-3">
+                        <div className="text-xs text-muted-foreground">Allocation</div>
+                        <div className="mt-1 font-mono font-semibold text-emerald-400">
+                          {previewDerived?.alloc != null ? percent2.format(previewDerived.alloc) : "—"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-3">
+                        <div className="text-xs text-muted-foreground">Students (Target)</div>
+                        <div className="mt-1 font-mono font-semibold text-blue-400">
+                          {previewScenario.target_students != null
+                            ? number0.format(previewScenario.target_students)
+                            : "—"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-3">
+                        <div className="text-xs text-muted-foreground">Fee Recoup Period</div>
+                        <div
+                          className={[
+                            "mt-1 font-mono font-semibold",
+                            previewDerived?.feeRecoupIsLong ? "text-destructive" : "text-blue-400",
+                          ].join(" ")}
+                        >
+                          {previewDerived?.feeRecoupYears != null
+                            ? `${previewDerived.feeRecoupYears.toFixed(2)} Years`
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {(previewScenario.tags && previewScenario.tags.length > 0) ||
+                    (previewScenario.notes && previewScenario.notes.trim()) ? (
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-4 text-sm">
+                        <div className="mb-2 text-xs font-semibold text-muted-foreground">
+                          Scenario metadata
+                        </div>
+                        {previewScenario.tags && previewScenario.tags.length > 0 && (
+                          <div className="mb-2 flex flex-wrap gap-1">
+                            {previewScenario.tags.map((t) => (
+                              <span
+                                key={t}
+                                className="rounded bg-background/40 px-2 py-0.5 text-[10px] text-muted-foreground"
+                              >
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {previewScenario.notes && previewScenario.notes.trim() && (
+                          <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                            {previewScenario.notes.trim()}
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
+
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-mono text-muted-foreground">
+                        Compare saved scenario to current draft (read-only)
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCompareOpen((o) => !o)}
+                        className="rounded border border-accent bg-background px-3 py-1 text-xs font-mono text-muted-foreground hover:bg-background/80"
+                      >
+                        {compareOpen ? "HIDE COMPARE" : "COMPARE"}
+                      </button>
+                    </div>
+
+                    {compareOpen && (
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-4 text-sm">
+                        <div className="mb-2 text-xs font-semibold text-muted-foreground">
+                          Delta vs current draft (Saved − Draft)
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          {(() => {
+                            const draftTdv = computed.tdv;
+                            const draftUpfront = computed.upfrontFee;
+                            const draftArr = computed.projectedArr;
+                            const draftAlloc = computed.allocation;
+                            const draftStudents = computed.activeStudents;
+                            const draftRecoup = computed.feeRecoupYears;
+                            const draftScore = dealScore?.score ?? null;
+
+                            const fmtDeltaMoney = (saved: number | null, draft: number | null) => {
+                              if (saved == null || draft == null) return "—";
+                              const d = saved - draft;
+                              const sign = d > 0 ? "+" : "";
+                              return `${sign}${currency0.format(d)}`;
+                            };
+                            const fmtDeltaPct = (saved: number | null, draft: number | null) => {
+                              if (saved == null || draft == null) return "—";
+                              const d = saved - draft;
+                              const sign = d > 0 ? "+" : "";
+                              return `${sign}${percent2.format(d)}`;
+                            };
+                            const fmtDeltaNum = (saved: number | null, draft: number | null) => {
+                              if (saved == null || draft == null) return "—";
+                              const d = saved - draft;
+                              const sign = d > 0 ? "+" : "";
+                              return `${sign}${number0.format(d)}`;
+                            };
+                            const fmtDeltaYears = (saved: number | null, draft: number | null) => {
+                              if (saved == null || draft == null) return "—";
+                              const d = saved - draft;
+                              const sign = d > 0 ? "+" : "";
+                              return `${sign}${d.toFixed(2)} yrs`;
+                            };
+
+                            return (
+                              <>
+                                <div className="rounded-lg border border-accent/40 bg-background/20 p-3">
+                                  <div className="text-xs text-muted-foreground">Deal Score</div>
+                                  <div className={["mt-1 font-mono font-semibold", previewDerived?.dealScoreClass ?? ""].join(" ")}>
+                                    {previewDerived?.dealScore?.score != null && draftScore != null
+                                      ? `${previewDerived.dealScore.score - draftScore >= 0 ? "+" : ""}${previewDerived.dealScore.score - draftScore} pts`
+                                      : "—"}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-accent/40 bg-background/20 p-3">
+                                  <div className="text-xs text-muted-foreground">TDV</div>
+                                  <div className="mt-1 font-mono font-semibold text-blue-400">
+                                    {fmtDeltaMoney(previewDerived?.tdv ?? null, draftTdv ?? null)}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-accent/40 bg-background/20 p-3">
+                                  <div className="text-xs text-muted-foreground">Upfront Fee</div>
+                                  <div className="mt-1 font-mono font-semibold text-blue-400">
+                                    {fmtDeltaMoney(previewDerived?.upfrontFee ?? null, draftUpfront ?? null)}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-accent/40 bg-background/20 p-3">
+                                  <div className="text-xs text-muted-foreground">Projected ARR</div>
+                                  <div className="mt-1 font-mono font-semibold text-amber-400">
+                                    {fmtDeltaMoney(previewDerived?.projectedArr ?? null, draftArr ?? null)}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-accent/40 bg-background/20 p-3">
+                                  <div className="text-xs text-muted-foreground">Allocation</div>
+                                  <div className="mt-1 font-mono font-semibold text-emerald-400">
+                                    {fmtDeltaPct(previewDerived?.alloc ?? null, draftAlloc ?? null)}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-accent/40 bg-background/20 p-3">
+                                  <div className="text-xs text-muted-foreground">Students (Target)</div>
+                                  <div className="mt-1 font-mono font-semibold text-blue-400">
+                                    {fmtDeltaNum(
+                                      previewScenario.target_students ?? null,
+                                      draftStudents ?? null
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-accent/40 bg-background/20 p-3 sm:col-span-2">
+                                  <div className="text-xs text-muted-foreground">Fee Recoup Period</div>
+                                  <div className="mt-1 font-mono font-semibold text-blue-400">
+                                    {fmtDeltaYears(previewDerived?.feeRecoupYears ?? null, draftRecoup ?? null)}
+                                  </div>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Right Column: Deal Summary */}
                   <div className="lg:min-h-0">
                     {previewScenario.deal_summary && (
                       <div className="rounded-xl border border-accent bg-muted p-4 text-sm leading-relaxed">
+                        <div className="mb-3 text-sm text-muted-foreground">
+                          The Offbeat Yield Engine (OYE) classifies this opportunity as{" "}
+                          <span className="font-semibold">{previewDerived?.zoneStatus ?? "—"}</span>{" "}
+                          with a Deal Score of{" "}
+                          <span className={["font-semibold", previewDerived?.dealScoreClass ?? ""].join(" ")}>
+                            {previewDerived?.dealScore?.score != null
+                              ? `${previewDerived.dealScore.score}/100`
+                              : "—"}
+                          </span>
+                          . This deal is{" "}
+                          <span className={["font-semibold", previewDerived?.dealScoreClass ?? ""].join(" ")}>
+                            {previewDerived?.dealScore?.label != null
+                              ? previewDerived.dealScore.label.toLowerCase()
+                              : "—"}
+                          </span>
+                          .
+                        </div>
+
                         <div className="space-y-3 text-foreground">
                           {(previewScenario.deal_summary as string)
                             .split(/\n\n+/)
@@ -1783,27 +2557,48 @@ export function DealDeskContent() {
 
               {/* Footer */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-accent/40 p-6">
-                <button
-                  type="button"
-                  onClick={() => {
-                    loadScenario(previewScenario);
-                    setPreviewScenario(null);
-                  }}
-                  className="inline-flex items-center gap-2 rounded bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
-                >
-                  Load into Deal Desk
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggleScenarioSelection(previewScenario.id);
-                  }}
-                  className="text-xs font-mono text-destructive underline-offset-2 hover:underline"
-                >
-                  {selectedScenarioIds.has(previewScenario.id)
-                    ? "Unselect for delete"
-                    : "Mark for delete"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      loadScenario(previewScenario);
+                      setCompareOpen(false);
+                      setPreviewScenario(null);
+                    }}
+                    className="inline-flex items-center gap-2 rounded bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
+                  >
+                    Load into Deal Desk
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      duplicateScenarioIntoDraft(previewScenario);
+                      setCompareOpen(false);
+                      setPreviewScenario(null);
+                    }}
+                    className="inline-flex items-center gap-2 rounded border border-accent bg-background px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-background/80"
+                  >
+                    Duplicate into Draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => togglePinnedScenario(previewScenario)}
+                    className="inline-flex items-center gap-2 rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80"
+                  >
+                    {previewScenario.pinned ? "★ PINNED" : "☆ PIN"}
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleScenarioSelection(previewScenario.id)}
+                    className="text-xs font-mono text-destructive underline-offset-2 hover:underline"
+                  >
+                    {selectedScenarioIds.has(previewScenario.id)
+                      ? "Unselect for actions"
+                      : "Mark for archive/delete"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

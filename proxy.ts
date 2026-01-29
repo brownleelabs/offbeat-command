@@ -88,6 +88,20 @@ export async function proxy(request: NextRequest) {
     if (user && request.nextUrl.pathname === "/login") {
       return NextResponse.redirect(new URL("/", request.url));
     }
+
+    // 3. SUPER_ADMIN-only route guards (centralized)
+    if (user && request.nextUrl.pathname.startsWith("/deal-desk")) {
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const role = (profile as { role?: string } | null)?.role;
+      if (profileError || role !== "SUPER_ADMIN") {
+        return NextResponse.redirect(new URL("/", request.url));
+      }
+    }
   } catch (err) {
     console.error('[proxy] ❌ Unexpected error during auth check:', {
       error: err instanceof Error ? err.message : String(err),

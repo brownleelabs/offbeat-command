@@ -8,6 +8,7 @@ import { Box, ArrowUp, ArrowDown } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { useDashboard, type ViewMode } from "@/components/dashboard-context";
 import { DealDeskContent } from "@/app/deal-desk/page";
+import { insertDealScenario, listDealScenarios } from "@/app/deal-desk/scenario-actions";
 
 const MapView = dynamic(() => import("@/components/map-view"), { ssr: false });
 import {
@@ -547,7 +548,7 @@ export default function AdminDashboard() {
         {/* Map access is not RBAC; only which tokens are shown is (MapView filters by orgId). canReset is the only permission on the map (Reset button). */}
         {activeTab === "map" && (
           <div className="flex w-full flex-1 flex-col min-h-[480px]" style={{ height: "calc(100vh - 72px - 8rem)" }}>
-            <MapView mapboxToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN} canReset={effectivePermissions.mapReset} />
+            <MapView mapboxToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? ""} canReset={effectivePermissions.mapReset} />
           </div>
         )}
 
@@ -1577,7 +1578,7 @@ function calculateValueKPIs(tdv: number, yieldRatePercent: number) {
   };
 }
 
-function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> }) {
+function PricingTab({ supabase: _supabase }: { supabase: ReturnType<typeof createClient> }) {
   const [name, setName] = useState("");
   const [targetStudents, setTargetStudents] = useState(1000);
   const [redemptionVelocity, setRedemptionVelocity] = useState(0.5);
@@ -1586,28 +1587,43 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
   const [saveError, setSaveError] = useState("");
   const [scenarios, setScenarios] = useState<DealScenario[]>([]);
   const [loadingScenarios, setLoadingScenarios] = useState(false);
+  const [scenarioTotal, setScenarioTotal] = useState(0);
+  const [scenarioPage, setScenarioPage] = useState(1);
+  const scenarioPageSize = 12;
 
   // Calculate TDV and value-led KPIs in real-time
   const tdv = calculateTDV(targetStudents, redemptionVelocity, assumedYieldRate);
   const distributions = calculateDistributions(tdv, assumedYieldRate);
   const valueKPIs = calculateValueKPIs(tdv, assumedYieldRate);
+  const scenarioPageCount = Math.max(1, Math.ceil(scenarioTotal / scenarioPageSize));
 
-  // Load saved scenarios
-  useEffect(() => {
+  async function loadScenariosPage(page: number) {
     setLoadingScenarios(true);
-    supabase
-      .from("deal_scenarios")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) {
-          console.error("[Pricing] Error loading scenarios:", error);
-        } else {
-          setScenarios((data as DealScenario[]) ?? []);
-        }
-        setLoadingScenarios(false);
+    try {
+      const res = await listDealScenarios<DealScenario>({
+        page,
+        pageSize: scenarioPageSize,
+        showArchived: false,
+        showDeleted: false,
       });
-  }, [supabase]);
+      if (!res.success) {
+        console.error("[Pricing] Error loading scenarios:", res.error);
+        setScenarios([]);
+        setScenarioTotal(0);
+        return;
+      }
+      setScenarios(res.rows ?? []);
+      setScenarioTotal(res.total ?? 0);
+    } finally {
+      setLoadingScenarios(false);
+    }
+  }
+
+  // Load saved scenarios (paged)
+  useEffect(() => {
+    loadScenariosPage(scenarioPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioPage]);
 
   async function handleSave() {
     if (!name.trim()) {
@@ -1617,7 +1633,7 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
     setSaveError("");
     setSaving(true);
 
-    const { error } = await supabase.from("deal_scenarios").insert({
+    const insertRes = await insertDealScenario({
       name: name.trim(),
       target_students: targetStudents,
       redemption_velocity: redemptionVelocity,
@@ -1629,19 +1645,16 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
     });
 
     setSaving(false);
-    if (error) {
-      setSaveError(error.message);
+    if (!insertRes.success) {
+      setSaveError(insertRes.error);
     } else {
       setName("");
       setTargetStudents(1000);
       setRedemptionVelocity(0.5);
       setAssumedYieldRate(3.0);
-      // Reload scenarios
-      const { data } = await supabase
-        .from("deal_scenarios")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (data) setScenarios((data as DealScenario[]) ?? []);
+      // Reload scenarios (return to page 1)
+      setScenarioPage(1);
+      await loadScenariosPage(1);
     }
   }
 
@@ -1888,31 +1901,60 @@ function PricingTab({ supabase }: { supabase: ReturnType<typeof createClient> })
             <p className="text-sm text-muted-foreground">No saved scenarios yet.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {scenarios.map((scenario) => (
-              <div
-                key={scenario.id}
-                className="group cursor-pointer rounded-lg border border-white/10 bg-slate-900/50 p-4 transition hover:bg-white/5"
-                onClick={() => loadScenario(scenario)}
-              >
-                <div className="mb-2 font-semibold">{scenario.name}</div>
-                <div className="space-y-1 text-xs text-muted-foreground">
-                  <div className="font-mono">
-                    TDV: ${scenario.tdv_amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}
-                  </div>
-                  <div>
-                    {scenario.target_students.toLocaleString()} students @ {scenario.redemption_velocity} tokens/mo
-                  </div>
-                  <div>Yield: {scenario.assumed_yield_rate}%</div>
-                  {scenario.created_at && (
-                    <div className="mt-2 text-slate-600">
-                      {new Date(scenario.created_at).toLocaleDateString()}
-                    </div>
-                  )}
-                </div>
+          <>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-900/50 px-4 py-3">
+              <div className="text-xs text-muted-foreground">
+                Page <span className="font-mono text-white">{scenarioPage}</span> /{" "}
+                <span className="font-mono text-white">{scenarioPageCount}</span>{" "}
+                <span className="ml-2 font-mono">
+                  ({scenarioTotal.toLocaleString("en-US")} total)
+                </span>
               </div>
-            ))}
-          </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScenarioPage((p) => Math.max(1, p - 1))}
+                  disabled={scenarioPage <= 1}
+                  className="rounded border border-white/10 bg-black/20 px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-white/5 disabled:opacity-50"
+                >
+                  PREV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScenarioPage((p) => Math.min(scenarioPageCount, p + 1))}
+                  disabled={scenarioPage >= scenarioPageCount}
+                  className="rounded border border-white/10 bg-black/20 px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-white/5 disabled:opacity-50"
+                >
+                  NEXT
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {scenarios.map((scenario) => (
+                <div
+                  key={scenario.id}
+                  className="group cursor-pointer rounded-lg border border-white/10 bg-slate-900/50 p-4 transition hover:bg-white/5"
+                  onClick={() => loadScenario(scenario)}
+                >
+                  <div className="mb-2 font-semibold">{scenario.name}</div>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <div className="font-mono">
+                      TDV: ${scenario.tdv_amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                    </div>
+                    <div>
+                      {scenario.target_students.toLocaleString()} students @ {scenario.redemption_velocity} tokens/mo
+                    </div>
+                    <div>Yield: {scenario.assumed_yield_rate}%</div>
+                    {scenario.created_at && (
+                      <div className="mt-2 text-slate-600">
+                        {new Date(scenario.created_at).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
