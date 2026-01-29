@@ -787,8 +787,16 @@ export function getEconomicZone(yieldRate: number): EconomicZone {
   }
 }
 
-/** Mock current yield rate (4.2% = Zone 1 Normal). Replace with real API hook later. */
-const MOCK_CURRENT_YIELD = 4.2;
+/** All stages for System Health tooltip (rate range + ARR). */
+const SYSTEM_HEALTH_STAGES = [
+  { name: "Normal", rateRange: "> 2.0%", arr: "12%" },
+  { name: "Steady", rateRange: "1.5% - 2.0%", arr: "Reduced" },
+  { name: "Efficient", rateRange: "0.1% - 1.5%", arr: "Waived" },
+  { name: "Freeze", rateRange: "0.0%", arr: "0%" },
+] as const;
+
+/** Mock current yield rate (3.60% = BENJI rate until API connection). Replace with real API hook later. */
+const MOCK_CURRENT_YIELD = 3.6;
 
 function SystemStatus() {
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -833,33 +841,41 @@ function SystemStatus() {
 
   return (
     <div className="relative z-10 flex items-center justify-between border-b border-white/5 bg-slate-900/40 px-6 py-2 backdrop-blur-sm">
-      <div className="relative">
-        <div
-          className="flex items-center gap-2 text-xs font-mono cursor-help"
-          onMouseEnter={() => setShowTooltip(true)}
-          onMouseLeave={() => setShowTooltip(false)}
-        >
-          <div className={`h-2 w-2 rounded-full ${dotColor} ${pulseClass}`} />
-          <span className={textColor}>
-            System: {zone.name}
-          </span>
-        </div>
-        {showTooltip && (
-          <div className="absolute left-0 top-6 z-[100] w-80 rounded-lg border border-white/10 bg-slate-900 p-3 text-xs shadow-xl backdrop-blur-sm">
-            <div className="mb-2 border-b border-white/10 pb-2 text-slate-400">
-              Status is pegged to the BENJI interest rate (streamed live via API) and mapped to Offbeat YOE Stages.
-            </div>
-            <div className="font-mono font-semibold text-white">
-              Zone {zone.id}: {zone.name}
-            </div>
-            <div className="mt-1 text-slate-400">
-              <div>Rate Range: {zone.rateRange}</div>
-              <div className="mt-1">{zone.description}</div>
-              <div className="mt-1 font-mono">Operator Fee: {zone.operatorFee}</div>
-              <div className="mt-1 text-slate-500">Current Yield: {currentYield.toFixed(1)}%</div>
-            </div>
-          </div>
-        )}
+      <div className="flex items-center gap-2 text-xs font-mono">
+        <div className={`h-2 w-2 rounded-full ${dotColor} ${pulseClass}`} />
+        <span className={textColor}>
+          System Health: {zone.name}
+        </span>
+        <span className="relative inline-flex">
+          <button
+            type="button"
+            aria-label="System health zones and how they affect the system"
+            className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full border border-accent/60 bg-background text-[10px] leading-none text-muted-foreground hover:bg-background/80 focus:outline-none focus:ring-2 focus:ring-primary/30 cursor-help"
+            onMouseEnter={() => setShowTooltip(true)}
+            onMouseLeave={() => setShowTooltip(false)}
+            onFocus={() => setShowTooltip(true)}
+            onBlur={() => setShowTooltip(false)}
+          >
+            ?
+          </button>
+          {showTooltip && (
+            <span
+              role="tooltip"
+              className="absolute left-0 top-full z-[9999] mt-1 w-80 max-w-[90vw] rounded-lg border border-accent bg-muted p-2.5 text-left text-xs text-foreground shadow-lg"
+              onMouseEnter={() => setShowTooltip(true)}
+              onMouseLeave={() => setShowTooltip(false)}
+            >
+              <span className="mb-1 block text-[11px] font-semibold text-muted-foreground">
+                Current: {currentYield.toFixed(2)}%
+              </span>
+              {SYSTEM_HEALTH_STAGES.map((s) => (
+                <span key={s.name} className="block text-[11px] leading-relaxed">
+                  {s.name} — {s.rateRange} · ARR {s.arr}
+                </span>
+              ))}
+            </span>
+          )}
+        </span>
       </div>
       <div className="text-xs font-mono text-slate-500">
         Updated: {timeString}
