@@ -21,6 +21,14 @@ import {
   getRolePermissions,
   setRolePermission,
 } from "@/app/actions";
+import {
+  archiveCampaigns,
+  insertCampaign,
+  listCampaigns,
+  softDeleteCampaigns,
+  updateCampaignPinned,
+  type ListCampaignsResult,
+} from "@/app/campaigns/campaign-actions";
 import type { Campaign, TokenWithCampaign, DealScenario } from "@/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CampaignQuestion } from "@/types";
@@ -93,6 +101,7 @@ export default function AdminDashboard() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [targetSchoolId, setTargetSchoolId] = useState("");
   const [assignToSchoolMessage, setAssignToSchoolMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [assignCampaignMessage, setAssignCampaignMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [rolePermissions, setRolePermissions] = useState<RolePermissionRow[]>([]);
   const [showArchivedCampaigns, setShowArchivedCampaigns] = useState(false);
 
@@ -132,15 +141,19 @@ export default function AdminDashboard() {
     let cancelled = false;
     const client = createClient();
     (async () => {
-      const { data } = await client
-        .from("organizations")
-        .select("name")
-        .eq("id", orgId)
-        .single();
-      if (!cancelled && data && typeof data === "object" && "name" in data) {
-        setOrgName(String((data as { name: string }).name));
-      } else if (!cancelled) {
-        setOrgName(null);
+      try {
+        const { data } = await client
+          .from("organizations")
+          .select("name")
+          .eq("id", orgId)
+          .single();
+        if (!cancelled && data && typeof data === "object" && "name" in data) {
+          setOrgName(String((data as { name: string }).name));
+        } else if (!cancelled) {
+          setOrgName(null);
+        }
+      } catch {
+        if (!cancelled) setOrgName(null);
       }
     })();
     return () => {
@@ -154,36 +167,51 @@ export default function AdminDashboard() {
     let campaignsQuery = supabase
       .from("campaigns")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(500);
+    // Fleet dropdown/list should never include deleted campaigns; optionally hide archived too.
+    campaignsQuery = campaignsQuery.is("deleted_at", null);
     if (!showArchivedCampaigns) {
-      campaignsQuery = campaignsQuery.is("deleted_at", null);
+      campaignsQuery = campaignsQuery.is("archived_at", null);
     }
     if (filterOrgId != null) {
       campaignsQuery = campaignsQuery.eq("organization_id", filterOrgId);
     }
-    const { data: cData } = await campaignsQuery;
-    setCampaigns((cData as Campaign[]) ?? []);
-
-    let tokensQuery = supabase
-      .from("tokens")
-      .select("*, campaigns(name), organizations(name)")
-      .order("id");
-    if (filterOrgId != null) {
-      tokensQuery = tokensQuery.eq("organization_id", filterOrgId);
+    try {
+      const { data: cData } = await campaignsQuery;
+      setCampaigns((cData as Campaign[]) ?? []);
+    } catch {
+      setCampaigns([]);
     }
-    const { data: tData, error } = await tokensQuery;
-    if (!error && tData) {
-      setTokens(normalizeTokensWithCampaign(tData));
-    } else {
-      if (error) {
-        console.warn("Fleet join failed, loading tokens only:", error.message);
-      }
-      let tokensOnlyQuery = supabase.from("tokens").select("*").order("id");
+
+    try {
+      let tokensQuery = supabase
+        .from("tokens")
+        .select("*, campaigns(name), organizations(name)")
+        .order("id");
       if (filterOrgId != null) {
-        tokensOnlyQuery = tokensOnlyQuery.eq("organization_id", filterOrgId);
+        tokensQuery = tokensQuery.eq("organization_id", filterOrgId);
       }
-      const { data: tokensOnly } = await tokensOnlyQuery;
-      setTokens(normalizeTokensWithCampaign(tokensOnly ?? []));
+      const { data: tData, error } = await tokensQuery;
+      if (!error && tData) {
+        setTokens(normalizeTokensWithCampaign(tData));
+      } else {
+        if (error) {
+          console.warn("Fleet join failed, loading tokens only:", error.message);
+        }
+        try {
+          let tokensOnlyQuery = supabase.from("tokens").select("*").order("id");
+          if (filterOrgId != null) {
+            tokensOnlyQuery = tokensOnlyQuery.eq("organization_id", filterOrgId);
+          }
+          const { data: tokensOnly } = await tokensOnlyQuery;
+          setTokens(normalizeTokensWithCampaign(tokensOnly ?? []));
+        } catch {
+          setTokens([]);
+        }
+      }
+    } catch {
+      setTokens([]);
     }
 
     let responsesQuery = supabase
@@ -192,8 +220,12 @@ export default function AdminDashboard() {
     if (filterOrgId != null) {
       responsesQuery = responsesQuery.eq("organization_id", filterOrgId);
     }
-    const { count } = await responsesQuery;
-    setResponsesCount(count ?? 0);
+    try {
+      const { count } = await responsesQuery;
+      setResponsesCount(count ?? 0);
+    } catch {
+      setResponsesCount(0);
+    }
   }, [dataScopeOrgId, showArchivedCampaigns]);
 
   useEffect(() => {
@@ -240,14 +272,21 @@ export default function AdminDashboard() {
                 // Campaign ID changed - clear stale data immediately
                 // Realtime updates don't include joined data, so token.campaigns will be null
                 campaigns = null;
-                // Fetch new campaign data asynchronously (only if campaign_id is not null)
-                if (token.campaign_id) {
+                // Fetch new campaign data asynchronously only when campaign_id is a valid UUID (avoid malformed DB data reaching Supabase)
+                const rawCid = token.campaign_id;
+                const validCampaignId =
+                  typeof rawCid === "string" &&
+                  rawCid.trim().length > 0 &&
+                  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawCid.trim())
+                    ? rawCid.trim()
+                    : null;
+                if (validCampaignId) {
                   (async () => {
                     try {
                       const { data } = await supabase
                         .from("campaigns")
                         .select("name")
-                        .eq("id", token.campaign_id)
+                        .eq("id", validCampaignId)
                         .single();
                       if (data) {
                         setTokens((current) => {
@@ -324,19 +363,41 @@ export default function AdminDashboard() {
   }, [userRole, dataScopeOrgId, supabase]);
 
   const UNASSIGN_CAMPAIGN_VALUE = "__unassign__";
+  const campaignIdUuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   async function assignTokens() {
     if (selectedTokenIds.size === 0) return;
     if (targetCampaignId !== UNASSIGN_CAMPAIGN_VALUE && !targetCampaignId) return;
-    const payload = targetCampaignId === UNASSIGN_CAMPAIGN_VALUE ? { campaign_id: null } : { campaign_id: targetCampaignId };
+    if (
+      targetCampaignId !== UNASSIGN_CAMPAIGN_VALUE &&
+      (typeof targetCampaignId !== "string" ||
+        targetCampaignId.trim().length === 0 ||
+        !campaignIdUuidRegex.test(targetCampaignId.trim()))
+    ) {
+      setAssignCampaignMessage({ type: "error", text: "Invalid campaign." });
+      return;
+    }
+    setAssignCampaignMessage(null);
+    const validTokenIds = Array.from(selectedTokenIds).filter(
+      (tid) => typeof tid === "string" && tid.trim().length > 0 && campaignIdUuidRegex.test(tid.trim())
+    );
+    if (validTokenIds.length === 0) {
+      setAssignCampaignMessage({ type: "error", text: "No valid tokens selected." });
+      return;
+    }
+    const payload = targetCampaignId === UNASSIGN_CAMPAIGN_VALUE ? { campaign_id: null } : { campaign_id: targetCampaignId.trim() };
     const { error } = await supabase
       .from("tokens")
       .update(payload)
-      .in("id", Array.from(selectedTokenIds));
-    if (!error) {
-      setSelectedTokenIds(new Set());
-      setTargetCampaignId("");
-      loadData();
+      .in("id", validTokenIds);
+    if (error) {
+      setAssignCampaignMessage({ type: "error", text: error.message ?? "Failed to set campaign." });
+      return;
     }
+    setAssignCampaignMessage(null);
+    setAssignToSchoolMessage(null);
+    setSelectedTokenIds(new Set());
+    setTargetCampaignId("");
+    loadData();
   }
 
   async function assignTokensToSchool() {
@@ -345,10 +406,11 @@ export default function AdminDashboard() {
     const result = await bulkAssignTokensToSchool(Array.from(selectedTokenIds), targetSchoolId);
     if (result.success) {
       setAssignToSchoolMessage({ type: "success", text: `${result.count} token(s) assigned to organization.` });
+      setAssignCampaignMessage(null);
       setSelectedTokenIds(new Set());
       loadData();
     } else {
-      setAssignToSchoolMessage({ type: "error", text: result.error });
+      setAssignToSchoolMessage({ type: "error", text: result.error ?? "Failed to assign." });
     }
   }
 
@@ -570,6 +632,7 @@ export default function AdminDashboard() {
             setTargetSchoolId={setTargetSchoolId}
             onAssignToSchool={assignTokensToSchool}
             assignToSchoolMessage={assignToSchoolMessage}
+            assignCampaignMessage={assignCampaignMessage}
             fleetWrite={effectivePermissions.fleetWrite}
           />
         )}
@@ -578,7 +641,6 @@ export default function AdminDashboard() {
           <CampaignsTab
             campaigns={campaigns}
             onRefresh={loadData}
-            supabase={supabase}
             orgId={orgId}
             organizations={organizations}
             userRole={userRole}
@@ -978,6 +1040,7 @@ function FleetTab({
   setTargetSchoolId,
   onAssignToSchool,
   assignToSchoolMessage,
+  assignCampaignMessage,
   fleetWrite,
 }: {
   tokens: TokenWithCampaign[];
@@ -996,8 +1059,10 @@ function FleetTab({
   setTargetSchoolId: (id: string) => void;
   onAssignToSchool: () => void;
   assignToSchoolMessage: { type: "success" | "error"; text: string } | null;
+  assignCampaignMessage: { type: "success" | "error"; text: string } | null;
   fleetWrite: boolean;
 }) {
+  const campaignIdUuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const toggleOne = (id: string) => {
     const next = new Set(selectedTokenIds);
     if (next.has(id)) next.delete(id);
@@ -1031,11 +1096,13 @@ function FleetTab({
               >
                 <option value="">Select Campaign to Assign...</option>
                 <option value="__unassign__">Clear Campaign (Unassigned)</option>
-                {campaigns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
+                {campaigns
+                  .filter((c) => typeof c.id === "string" && c.id.length > 0 && campaignIdUuidRegex.test(c.id))
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {String(c.name ?? "")}
+                    </option>
+                  ))}
               </select>
               <button
                 onClick={onAssign}
@@ -1091,15 +1158,15 @@ function FleetTab({
         </div>
       </div>
 
-      {assignToSchoolMessage && (
+      {(assignToSchoolMessage || assignCampaignMessage) && (
         <div
           className={`mb-4 rounded border px-4 py-2 text-sm ${
-            assignToSchoolMessage.type === "success"
+            (assignToSchoolMessage ?? assignCampaignMessage)!.type === "success"
               ? "border-success bg-success/10 text-success"
               : "border-destructive bg-destructive/10 text-destructive"
           }`}
         >
-          {assignToSchoolMessage.text}
+          {(assignToSchoolMessage ?? assignCampaignMessage)!.text}
         </div>
       )}
 
@@ -1177,7 +1244,6 @@ function FleetTab({
 function CampaignsTab({
   campaigns,
   onRefresh,
-  supabase,
   orgId,
   organizations,
   userRole,
@@ -1187,7 +1253,6 @@ function CampaignsTab({
 }: {
   campaigns: Campaign[];
   onRefresh: () => void;
-  supabase: ReturnType<typeof createClient>;
   orgId: string | null;
   organizations: Organization[];
   userRole: string | undefined;
@@ -1200,6 +1265,96 @@ function CampaignsTab({
   const [saving, setSaving] = useState(false);
   const [createOrgId, setCreateOrgId] = useState<string>("");
   const [createError, setCreateError] = useState<string>("");
+
+  // SUPER_ADMIN: server-side list with pagination and search
+  const [listRows, setListRows] = useState<Campaign[]>([]);
+  const [campaignTotal, setCampaignTotal] = useState(0);
+  const [campaignPage, setCampaignPage] = useState(1);
+  const [campaignPageSize] = useState(50);
+  const [campaignSearchQuery, setCampaignSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [showDeletedCampaigns, setShowDeletedCampaigns] = useState(false);
+  const [loadingCampaigns, setLoadingCampaigns] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(new Set());
+  const [batchActionError, setBatchActionError] = useState("");
+  const [batchActionLoading, setBatchActionLoading] = useState(false);
+
+  useEffect(() => {
+    if (userRole !== "SUPER_ADMIN") return;
+    const t = setTimeout(() => setDebouncedSearchQuery(campaignSearchQuery), 300);
+    return () => clearTimeout(t);
+  }, [campaignSearchQuery, userRole]);
+
+  const loadCampaignsList = useCallback(
+    async (overridePage?: number, getIsCancelled?: () => boolean) => {
+      if (userRole !== "SUPER_ADMIN") return;
+      const rawPage = overridePage ?? campaignPage;
+      const pageToLoad =
+        Number.isFinite(Number(rawPage)) && Number(rawPage) >= 1
+          ? Math.floor(Number(rawPage))
+          : 1;
+      setLoadingCampaigns(true);
+      setLoadError("");
+      try {
+        const res: ListCampaignsResult<Campaign> = await listCampaigns({
+          page: pageToLoad,
+          pageSize: campaignPageSize,
+          searchQuery: debouncedSearchQuery,
+          showArchived: showArchivedCampaigns,
+          showDeleted: showDeletedCampaigns,
+        });
+        if (getIsCancelled?.()) return;
+        if (!res.success) {
+          setLoadError(res.error ?? "Failed to load campaigns.");
+          setListRows([]);
+          setCampaignTotal(0);
+          return;
+        }
+        setBatchActionError("");
+        setListRows(Array.isArray(res.rows) ? res.rows : []);
+        const rawTotal = res.total ?? 0;
+        const total =
+          typeof rawTotal === "number" && Number.isFinite(rawTotal) && rawTotal >= 0
+            ? Math.floor(rawTotal)
+            : 0;
+        setCampaignTotal(total);
+        const safeSize = campaignPageSize || 1;
+        const maxPage = total === 0 ? 1 : Math.max(1, Math.ceil(total / safeSize));
+        if (pageToLoad > maxPage) setCampaignPage(maxPage);
+        else if (
+          pageToLoad !== campaignPage &&
+          Number.isFinite(Number(pageToLoad)) &&
+          Number(pageToLoad) >= 1
+        ) {
+          setCampaignPage(Math.max(1, Math.floor(Number(pageToLoad))));
+        }
+      } catch {
+        setLoadError("Failed to load campaigns.");
+        setListRows([]);
+        setCampaignTotal(0);
+      } finally {
+        setLoadingCampaigns(false);
+      }
+    },
+    [
+      userRole,
+      campaignPage,
+      campaignPageSize,
+      debouncedSearchQuery,
+      showArchivedCampaigns,
+      showDeletedCampaigns,
+    ]
+  );
+
+  useEffect(() => {
+    if (userRole !== "SUPER_ADMIN") return;
+    let cancelled = false;
+    loadCampaignsList(campaignPage, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
+  }, [userRole, campaignPage, debouncedSearchQuery, showArchivedCampaigns, showDeletedCampaigns, loadCampaignsList]);
 
   const addQuestion = () => {
     if (questions.length >= MAX_QUESTIONS) return;
@@ -1216,44 +1371,39 @@ function CampaignsTab({
     });
   };
 
-  async function createCampaign() {
-    const trimmedName = name.trim();
+  async function createCampaignSubmit() {
+    const trimmedName = String(name ?? "").trim();
     if (!trimmedName) return;
     const targetOrgId = orgId ?? (createOrgId || null);
     if (!targetOrgId) {
       setCreateError("Select an organization for this campaign.");
       return;
     }
-    const { data: existing } = await supabase
-      .from("campaigns")
-      .select("id")
-      .eq("organization_id", targetOrgId)
-      .eq("name", trimmedName)
-      .is("deleted_at", null)
-      .maybeSingle();
-    if (existing) {
-      setCreateError("A campaign with this name already exists for this organization.");
-      return;
-    }
     setCreateError("");
     const qs: CampaignQuestion[] = questions
-      .map((text, order) => ({ order: order + 1, text: text.trim() }))
+      .map((text, order) => ({ order: order + 1, text: String(text ?? "").trim() }))
       .filter((q) => q.text.length > 0);
     setSaving(true);
-    const { error } = await supabase.from("campaigns").insert({
-      name: trimmedName,
-      required_fields: CAMPAIGN_REQUIRED_FIELDS,
-      questions: qs.length ? qs : null,
-      organization_id: targetOrgId,
-    });
-    setSaving(false);
-    if (!error) {
-      setName("");
-      setQuestions([""]);
-      setCreateOrgId("");
-      onRefresh();
-    } else {
-      setCreateError(error.message);
+    try {
+      const res = await insertCampaign({
+        name: trimmedName,
+        organization_id: targetOrgId,
+        required_fields: CAMPAIGN_REQUIRED_FIELDS,
+        questions: qs.length ? qs : null,
+      });
+      if (res.success) {
+        setName("");
+        setQuestions([""]);
+        setCreateOrgId("");
+        onRefresh();
+        if (userRole === "SUPER_ADMIN") loadCampaignsList(1);
+      } else {
+        setCreateError(res.error ?? "Create failed.");
+      }
+    } catch {
+      setCreateError("Create failed.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -1261,13 +1411,125 @@ function CampaignsTab({
     Array.isArray(c.questions) ? c.questions.length : 0;
   const requiredCount = CAMPAIGN_REQUIRED_FIELDS.length;
 
+  const useServerList = userRole === "SUPER_ADMIN";
+  const displayCampaigns = useServerList ? listRows : campaigns;
+  const safePageSize = campaignPageSize || 1;
+  const campaignPageCount = useServerList ? Math.max(1, Math.ceil(campaignTotal / safePageSize)) : 1;
+  const effectivePage =
+    Number.isFinite(Number(campaignPage)) && Number(campaignPage) >= 1
+      ? Math.min(campaignPageCount, Math.floor(Number(campaignPage)))
+      : 1;
+  const showingFrom = campaignTotal === 0 ? 0 : (effectivePage - 1) * safePageSize + 1;
+  const showingTo = Math.min(campaignTotal, effectivePage * safePageSize);
+
+  const campaignIdUuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const validDisplayIds = displayCampaigns
+    .map((c) => c.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0 && campaignIdUuidRegex.test(id));
+  const visibleCampaignIds = new Set(validDisplayIds);
+  const selectedVisibleIds = [...selectedCampaignIds].filter((id) => visibleCampaignIds.has(id));
+
+  function toggleCampaignSelection(id: string) {
+    setSelectedCampaignIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleAllCampaigns(checked: boolean) {
+    setSelectedCampaignIds(checked ? new Set(validDisplayIds) : new Set());
+  }
+
+  const validSelectedIds = selectedVisibleIds.filter(
+    (id): id is string => typeof id === "string" && id.length > 0 && campaignIdUuidRegex.test(id)
+  );
+  async function batchArchive() {
+    if (validSelectedIds.length === 0) return;
+    setBatchActionError("");
+    setBatchActionLoading(true);
+    try {
+      const res = await archiveCampaigns(validSelectedIds, true);
+      if (res.success) {
+        setSelectedCampaignIds(new Set());
+        loadCampaignsList(campaignPage);
+      } else setBatchActionError(res.error ?? "Archive failed.");
+    } catch {
+      setBatchActionError("Archive failed.");
+    } finally {
+      setBatchActionLoading(false);
+    }
+  }
+  async function batchDelete() {
+    if (validSelectedIds.length === 0) return;
+    setBatchActionError("");
+    setBatchActionLoading(true);
+    try {
+      const res = await softDeleteCampaigns(validSelectedIds, true);
+      if (res.success) {
+        setSelectedCampaignIds(new Set());
+        loadCampaignsList(campaignPage);
+      } else setBatchActionError(res.error ?? "Delete failed.");
+    } catch {
+      setBatchActionError("Delete failed.");
+    } finally {
+      setBatchActionLoading(false);
+    }
+  }
+  async function batchRestore() {
+    if (validSelectedIds.length === 0) return;
+    setBatchActionError("");
+    setBatchActionLoading(true);
+    try {
+      const res = await softDeleteCampaigns(validSelectedIds, false);
+      if (res.success) {
+        setSelectedCampaignIds(new Set());
+        loadCampaignsList(campaignPage);
+      } else setBatchActionError(res.error ?? "Restore failed.");
+    } catch {
+      setBatchActionError("Restore failed.");
+    } finally {
+      setBatchActionLoading(false);
+    }
+  }
+  async function batchUnarchive() {
+    if (validSelectedIds.length === 0) return;
+    setBatchActionError("");
+    setBatchActionLoading(true);
+    try {
+      const res = await archiveCampaigns(validSelectedIds, false);
+      if (res.success) {
+        setSelectedCampaignIds(new Set());
+        loadCampaignsList(campaignPage);
+      } else setBatchActionError(res.error ?? "Unarchive failed.");
+    } catch {
+      setBatchActionError("Unarchive failed.");
+    } finally {
+      setBatchActionLoading(false);
+    }
+  }
+  async function toggleCampaignPinned(c: Campaign) {
+    if (!c.id) return;
+    setBatchActionError("");
+    const next = !(c.pinned ?? false);
+    try {
+      const res = await updateCampaignPinned(c.id, next);
+      if (res.success) {
+        loadCampaignsList(campaignPage);
+      } else {
+        setBatchActionError(res.error ?? "Pin update failed.");
+      }
+    } catch {
+      setBatchActionError("Pin update failed.");
+    }
+  }
+
   return (
     <div className="mx-auto grid max-w-[98vw] grid-cols-1 gap-8 px-4 py-8 font-sans lg:grid-cols-2">
       {campaignsWrite && (
       <div className="flex flex-col p-4">
         <h2 className="mb-6 text-xl font-bold">Create Campaign</h2>
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
-          {/* Left column — Logistics */}
           <fieldset className="space-y-6 lg:col-span-5">
             <legend className="px-0 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Logistics
@@ -1286,9 +1548,11 @@ function CampaignsTab({
                   className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
                 >
                   <option value="">Select organization...</option>
-                  {organizations.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
+                  {organizations
+                    .filter((o) => typeof o.id === "string" && o.id.length > 0)
+                    .map((o) => (
+                      <option key={o.id} value={o.id}>{String(o.name ?? "")}</option>
+                    ))}
                 </select>
                 {organizations.length === 0 && (
                   <p className="text-xs text-amber-500">
@@ -1307,7 +1571,8 @@ function CampaignsTab({
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Austin Q1 Survey"
+                placeholder="e.g. Austin Q1 Campaign"
+                maxLength={500}
                 className="h-10 w-full rounded border border-border bg-black/20 px-3 text-sm focus:ring-2 focus:ring-primary/20"
               />
             </div>
@@ -1328,7 +1593,6 @@ function CampaignsTab({
               </p>
             </div>
           </fieldset>
-          {/* Right column — Additional questions */}
           <div className="space-y-4 lg:col-span-7">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
@@ -1377,11 +1641,11 @@ function CampaignsTab({
         {createError && <p className="mt-4 text-sm text-destructive">{createError}</p>}
         <div className="mt-8 flex justify-end border-t border-white/10 pt-8">
           <button
-            onClick={createCampaign}
-            disabled={saving || !name.trim() || (orgId === null && !createOrgId)}
+            onClick={createCampaignSubmit}
+            disabled={saving || !String(name ?? "").trim() || (orgId === null && !createOrgId)}
             className="h-11 w-full rounded bg-primary px-6 text-base font-semibold text-primary-foreground shadow-lg shadow-blue-500/20 disabled:opacity-50 md:w-auto md:min-w-[200px]"
           >
-            {saving ? "Launching…" : "Launch Campaign"}
+            {saving ? "Creating…" : "Create campaign"}
           </button>
         </div>
       </div>
@@ -1389,49 +1653,291 @@ function CampaignsTab({
 
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-xl font-bold">{showArchivedCampaigns ? "All Surveys" : "Active Surveys"}</h2>
-          <label className="flex items-center gap-2 text-sm text-muted-foreground">
-            <input
-              name="showArchivedCampaigns"
-              aria-label="Show archived campaigns"
-              type="checkbox"
-              checked={showArchivedCampaigns}
-              onChange={(e) => setShowArchivedCampaigns(e.target.checked)}
-              className="rounded border-accent"
-            />
-            Show archived
-          </label>
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold">
+              {showArchivedCampaigns || (useServerList && showDeletedCampaigns) ? "All campaigns" : "Campaigns"}
+            </h2>
+            {useServerList && displayCampaigns.length > 0 && (
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  aria-label="Select all on this page"
+                  checked={validDisplayIds.length > 0 && validDisplayIds.every((id) => selectedCampaignIds.has(id))}
+                  onChange={(e) => toggleAllCampaigns(e.target.checked)}
+                  className="h-4 w-4 rounded border-accent"
+                />
+                Select all
+              </label>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            {useServerList && (
+              <>
+                <input
+                  type="search"
+                  placeholder="Search by name or ID..."
+                  value={campaignSearchQuery}
+                  onChange={(e) => setCampaignSearchQuery(e.target.value)}
+                  className="h-9 w-48 rounded border border-border bg-black/20 px-2 text-sm"
+                  aria-label="Search campaigns"
+                />
+                <button
+                  type="button"
+                  onClick={() => loadCampaignsList(campaignPage)}
+                  disabled={loadingCampaigns}
+                  className="rounded border border-accent bg-muted px-3 py-1.5 text-xs font-mono text-muted-foreground hover:bg-background/60 disabled:opacity-50"
+                >
+                  {loadingCampaigns ? "Refreshing…" : "Refresh"}
+                </button>
+              </>
+            )}
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                name="showArchivedCampaigns"
+                aria-label="Show archived campaigns"
+                type="checkbox"
+                checked={showArchivedCampaigns}
+                onChange={(e) => {
+                  setShowArchivedCampaigns(e.target.checked);
+                  if (useServerList) setCampaignPage(1);
+                }}
+                className="rounded border-accent"
+              />
+              Show archived
+            </label>
+            {useServerList && (
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  name="showDeletedCampaigns"
+                  aria-label="Show deleted campaigns"
+                  type="checkbox"
+                  checked={showDeletedCampaigns}
+                  onChange={(e) => {
+                    setShowDeletedCampaigns(e.target.checked);
+                    setCampaignPage(1);
+                  }}
+                  className="rounded border-accent"
+                />
+                Show deleted
+              </label>
+            )}
+          </div>
         </div>
-        {campaigns.length === 0 && (
+        {useServerList && (loadError || batchActionError) && (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-destructive">{loadError || batchActionError}</p>
+            {loadError && (
+              <button
+                type="button"
+                onClick={() => loadCampaignsList(campaignPage)}
+                disabled={loadingCampaigns}
+                className="rounded border border-accent px-2 py-1 text-xs disabled:opacity-50"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        )}
+        {useServerList && validSelectedIds.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-accent bg-muted/50 p-3">
+            <span className="text-xs text-muted-foreground">{validSelectedIds.length} selected</span>
+            <button
+              type="button"
+              onClick={batchArchive}
+              disabled={batchActionLoading}
+              className="rounded border border-accent px-2 py-1 text-xs font-mono disabled:opacity-50"
+            >
+              Archive selected
+            </button>
+            <button
+              type="button"
+              onClick={batchDelete}
+              disabled={batchActionLoading}
+              className="rounded border border-destructive/50 px-2 py-1 text-xs font-mono text-destructive disabled:opacity-50"
+            >
+              Delete selected
+            </button>
+            {showDeletedCampaigns && (
+              <button
+                type="button"
+                onClick={batchRestore}
+                disabled={batchActionLoading}
+                className="rounded border border-accent px-2 py-1 text-xs font-mono disabled:opacity-50"
+              >
+                Restore selected
+              </button>
+            )}
+            {showArchivedCampaigns && (
+              <button
+                type="button"
+                onClick={batchUnarchive}
+                disabled={batchActionLoading}
+                className="rounded border border-accent px-2 py-1 text-xs font-mono disabled:opacity-50"
+              >
+                Unarchive selected
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSelectedCampaignIds(new Set())}
+              className="rounded border border-accent px-2 py-1 text-xs font-mono text-muted-foreground"
+            >
+              Clear selection
+            </button>
+          </div>
+        )}
+        {displayCampaigns.length === 0 && !loadError && (
           <p className="text-sm italic text-muted-foreground">No campaigns yet.</p>
         )}
-        {campaigns.map((c) => (
-          <Link
-            key={c.id}
-            href={`/campaigns/${c.id}`}
-            className="flex justify-between rounded-lg border border-white/10 bg-slate-900/50 p-4 transition hover:bg-white/5"
+        {displayCampaigns.map((c, i) => {
+          const campaignIdSafe =
+            typeof c.id === "string" && c.id.length > 0 && campaignIdUuidRegex.test(c.id);
+          return (
+          <div
+            key={c.id ?? `campaign-${i}`}
+            className="flex items-start justify-between gap-4 rounded-lg border border-white/10 bg-slate-900/50 p-4 transition hover:bg-white/5"
           >
-            <div>
-              <span className="font-bold">{c.name}</span>
-              {organizations.length > 0 && (
-                <span className="ml-2 rounded bg-muted-foreground/20 px-1.5 py-0.5 text-xs text-muted-foreground">
-                  {organizations.find((o) => o.id === c.organization_id)?.name ?? "—"}
-                </span>
-              )}
-              {(c as Campaign & { deleted_at?: string | null }).deleted_at && (
-                <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400">Archived</span>
-              )}
-              <p className="font-mono text-xs text-muted-foreground">{c.id}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {requiredCount} required fields
-                {questionCount(c) > 0 && ` + ${questionCount(c)} questions`}
-              </p>
+            {useServerList && (
+              <div className="flex shrink-0 items-center gap-2">
+                <input
+                  type="checkbox"
+                  aria-label={`Select ${String(c.name ?? "Campaign")}`}
+                  checked={campaignIdSafe && selectedCampaignIds.has(c.id)}
+                  onChange={() => campaignIdSafe && c.id && toggleCampaignSelection(c.id)}
+                  className="h-4 w-4 rounded border-accent"
+                />
+                <button
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); campaignIdSafe && c.id && toggleCampaignPinned(c); }}
+                  className="rounded border border-accent px-2 py-0.5 text-xs font-mono text-muted-foreground hover:bg-background/60"
+                  title={c.pinned ? "Unpin" : "Pin"}
+                  aria-label={c.pinned ? "Unpin" : "Pin"}
+                >
+                  {c.pinned ? "★" : "☆"}
+                </button>
+              </div>
+            )}
+            {campaignIdSafe ? (
+            <Link
+              href={`/campaigns/${c.id}`}
+              className="min-w-0 flex-1"
+            >
+              <div>
+                <span className="font-bold">{String(c.name ?? "Untitled")}</span>
+                {organizations.length > 0 && (
+                  <span className="ml-2 rounded bg-muted-foreground/20 px-1.5 py-0.5 text-xs text-muted-foreground">
+                    {String(organizations.find((o) => o.id === c.organization_id)?.name ?? "—")}
+                  </span>
+                )}
+                {useServerList && (c.status === "draft" || c.status === "active" || c.status === "inactive") && (
+                  <span
+                    className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
+                      c.status === "active"
+                        ? "bg-emerald-500/20 text-emerald-400"
+                        : c.status === "draft"
+                          ? "bg-blue-500/20 text-blue-400"
+                          : "bg-amber-500/20 text-amber-400"
+                    }`}
+                  >
+                    {c.status}
+                  </span>
+                )}
+                {!useServerList && (c as Campaign & { deleted_at?: string | null }).deleted_at && (
+                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400">Archived</span>
+                )}
+                <p className="font-mono text-xs text-muted-foreground">{c.id != null ? String(c.id) : "—"}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {requiredCount} required fields
+                  {questionCount(c) > 0 && ` + ${questionCount(c)} questions`}
+                </p>
+              </div>
+            </Link>
+            ) : (
+            <div className="min-w-0 flex-1">
+              <div>
+                <span className="font-bold">{String(c.name ?? "Untitled")}</span>
+                {organizations.length > 0 && (
+                  <span className="ml-2 rounded bg-muted-foreground/20 px-1.5 py-0.5 text-xs text-muted-foreground">
+                    {String(organizations.find((o) => o.id === c.organization_id)?.name ?? "—")}
+                  </span>
+                )}
+                {useServerList && (c.status === "draft" || c.status === "active" || c.status === "inactive") && (
+                  <span
+                    className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
+                      c.status === "active"
+                        ? "bg-emerald-500/20 text-emerald-400"
+                        : c.status === "draft"
+                          ? "bg-blue-500/20 text-blue-400"
+                          : "bg-amber-500/20 text-amber-400"
+                    }`}
+                  >
+                    {c.status}
+                  </span>
+                )}
+                {!useServerList && (c as Campaign & { deleted_at?: string | null }).deleted_at && (
+                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400">Archived</span>
+                )}
+                <p className="font-mono text-xs text-muted-foreground">{c.id != null ? String(c.id) : "—"}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {requiredCount} required fields
+                  {questionCount(c) > 0 && ` + ${questionCount(c)} questions`}
+                </p>
+              </div>
             </div>
-            <div className="text-right text-sm font-bold text-primary">
-              {questionCount(c)} custom →
+            )}
+            <div className="flex shrink-0 items-center gap-2">
+              {campaignIdSafe ? (
+              <Link
+                href={`/campaigns/${c.id}`}
+                className="text-sm font-bold text-primary hover:underline"
+              >
+                View
+              </Link>
+              ) : (
+              <span className="text-sm font-bold text-muted-foreground">View</span>
+              )}
+              <span className="text-sm text-muted-foreground">
+                {questionCount(c)} custom →
+              </span>
             </div>
-          </Link>
-        ))}
+          </div>
+          );
+        })}
+        {useServerList && campaignTotal > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-4 text-sm text-muted-foreground">
+            <span>
+              Showing {showingFrom}–{showingTo} of {campaignTotal}
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCampaignPage((p) => {
+                    const next = Math.max(1, Number(p) - 1);
+                    return Number.isFinite(next) && next >= 1 ? Math.floor(next) : 1;
+                  });
+                }}
+                disabled={effectivePage <= 1 || loadingCampaigns}
+                className="rounded border border-accent px-2 py-1 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCampaignPage((p) => {
+                    const next = Math.min(campaignPageCount, Number(p) + 1);
+                    return Number.isFinite(next) && next >= 1 ? Math.floor(next) : 1;
+                  });
+                }}
+                disabled={effectivePage >= campaignPageCount || loadingCampaigns}
+                className="rounded border border-accent px-2 py-1 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -53,8 +53,8 @@ Shared terminology for describing dashboard elements to enable rapid UI changes.
 
 ### Campaigns Tab Structure
 - **Create Campaign Section**: Form for new campaigns (left column in grid)
-- **Active Surveys Section**: List of existing campaigns (right column in grid)
-- **Launch Campaign Button**: Footer action button with divider above
+- **Campaigns list**: List of campaigns with status, search, pagination (right column)
+- **Create campaign button**: Footer action to create a draft campaign
 
 ## Quick Reference
 
@@ -66,7 +66,7 @@ When requesting changes, use these terms:
 - **"Control Bar"** = Toolbar within Fleet tab
 - **"Fleet Table"** = Data table in Fleet tab
 - **"Create Campaign Section"** = Left side of Campaigns tab
-- **"Active Surveys Section"** = Right side of Campaigns tab
+- **"Campaigns list"** = Right side of Campaigns tab (campaigns with status, search, pagination)
 
 ## Styling Patterns
 

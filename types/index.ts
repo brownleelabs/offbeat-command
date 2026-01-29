@@ -45,14 +45,29 @@ export const CAMPAIGN_REQUIRED_FIELDS: CampaignRequiredField[] = [
   { key: "venmo_username", label: "Venmo username" },
 ];
 
+/** Campaign status: draft (not launched), active (accepting claims), inactive (archived or deleted). */
+export type CampaignStatus = "draft" | "active" | "inactive";
+
 /** Campaign (survey) stored in Supabase. */
 export interface Campaign {
   id: string;
   name: string;
   created_at?: string;
   organization_id: string | null;
+  /** draft | active | inactive; default draft. */
+  status?: CampaignStatus | null;
+  /** Set when status moves to active. */
+  launched_at?: string | null;
   /** Soft delete; when set, campaign is archived and claims are blocked. */
   deleted_at?: string | null;
+  deleted_by?: string | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  owner_user_id?: string | null;
+  last_viewed_at?: string | null;
+  pinned?: boolean | null;
+  pinned_at?: string | null;
+  pinned_by?: string | null;
   /** Required fields for reward payout; stored as JSONB. */
   required_fields?: CampaignRequiredField[];
   /** Up to 10 custom questions; stored as JSONB in DB. */

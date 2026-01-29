@@ -84,11 +84,18 @@ async function getTokenForClaim(
     };
 
     let campaign: Campaign | null = null;
-    if (token.campaign_id) {
+    const rawCampaignId = token.campaign_id;
+    const campaignId =
+      typeof rawCampaignId === "string" &&
+      rawCampaignId.trim().length > 0 &&
+      isValidUUID(rawCampaignId.trim())
+        ? rawCampaignId.trim()
+        : null;
+    if (campaignId) {
       const { data: camp } = await supabaseAdmin
         .from("campaigns")
         .select("*")
-        .eq("id", token.campaign_id)
+        .eq("id", campaignId)
         .single();
       if (camp) campaign = camp as Campaign;
     }

@@ -115,15 +115,10 @@ export async function resetDemo(
 // Types moved to lib/actions-constants.ts
 
 export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimResult> {
-  // LOG: Confirm function is being called
-  console.log('[submitClaim] 🚀 Function invoked:', {
-    tokenId: input.tokenId?.slice(0, 8) + '...',
-    campaignId: input.campaignId ? input.campaignId.slice(0, 8) + '...' : 'null',
-    studentEmail: input.studentEmail,
-    timestamp: new Date().toISOString(),
-  })
-
   try {
+    if (!input || typeof input !== 'object') {
+      return { success: false, error: 'Invalid request.' }
+    }
     const tokenId = normalizeClaimTokenId(input.tokenId)
     // SAFETY: Fail fast before ANY Supabase call
     if (!tokenId || !isValidUUID(tokenId)) {
@@ -141,7 +136,8 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       return { success: false, error: 'Server configuration error.' }
     }
 
-    const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
+      const { campaignId, firstName, lastName, studentId, studentEmail, venmoUsername, customAnswers, lat, lng, claimMetadata: clientMetadata } = input
+      const campaignIdInput = typeof campaignId === 'string' ? campaignId.trim() : ''
 
     try {
       // Fetch token with org + campaign to enforce business rules
@@ -170,21 +166,23 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         return { success: false, error: 'This token has already been claimed.' }
       }
 
-      // Enforce that token must be assigned to a campaign
-      const tokenCampaignId = (token as { campaign_id?: string | null }).campaign_id ?? null
-      if (!tokenCampaignId) {
+      // Enforce that token must be assigned to a campaign (valid UUID only; malformed DB data must not reach Supabase)
+      const rawCampaignId = (token as { campaign_id?: unknown }).campaign_id
+      const tokenCampaignId =
+        typeof rawCampaignId === 'string' && rawCampaignId.trim().length > 0 ? rawCampaignId.trim() : ''
+      if (!tokenCampaignId || !isValidUUID(tokenCampaignId)) {
         return { success: false, error: 'This asset is not currently active.' }
       }
 
       // Enforce that provided campaign matches token's campaign
-      if (!campaignId || campaignId !== tokenCampaignId) {
+      if (!campaignIdInput || campaignIdInput !== tokenCampaignId) {
         return { success: false, error: 'Invalid campaign for this token.' }
       }
 
-      // Validate campaign is not archived
+      // Validate campaign is active and not archived/deleted (only active campaigns accept claims)
       const { data: campaign, error: campErr } = await supabase
         .from('campaigns')
-        .select('id, deleted_at')
+        .select('id, status, deleted_at, archived_at')
         .eq('id', tokenCampaignId)
         .maybeSingle()
 
@@ -201,11 +199,25 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       if (!campaign) {
         return { success: false, error: 'Campaign not found.' }
       }
-      if ((campaign as { deleted_at?: string | null }).deleted_at) {
+      const camp = campaign as { status?: string | null; deleted_at?: string | null; archived_at?: string | null }
+      if (camp.deleted_at) {
         return { success: false, error: 'This campaign has ended.' }
       }
+      if (camp.archived_at) {
+        return { success: false, error: 'This campaign is not accepting claims.' }
+      }
+      if (camp.status !== 'active') {
+        return { success: false, error: 'This campaign is not currently active.' }
+      }
 
-      const orgId = (token as { organization_id?: string | null }).organization_id ?? null
+      const rawOrgId = (token as { organization_id?: unknown }).organization_id ?? null
+      const orgId =
+        rawOrgId != null &&
+        typeof rawOrgId === 'string' &&
+        rawOrgId.trim().length > 0 &&
+        isValidUUID(rawOrgId.trim())
+          ? rawOrgId.trim()
+          : null
 
       const serverHeaders: Record<string, string> = {}
       try {
@@ -225,20 +237,41 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         _submitted_at: new Date().toISOString(),
       }
 
+      let safeCustomAnswers: unknown[] = Array.isArray(customAnswers) ? customAnswers.slice(0, 20) : []
+      try {
+        JSON.stringify(safeCustomAnswers)
+      } catch {
+        safeCustomAnswers = []
+      }
+      let safeClaimMetadata: Record<string, unknown> = claim_metadata
+      try {
+        JSON.stringify(claim_metadata)
+      } catch {
+        safeClaimMetadata = { _server: serverHeaders, _submitted_at: new Date().toISOString() }
+      }
+
       const { error: insertErr } = await supabase.from('responses').insert({
         token_id: tokenId,
         campaign_id: tokenCampaignId,
         organization_id: orgId,
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        student_id: studentId.trim(),
-        student_email: studentEmail.trim(),
-        venmo_username: venmoUsername.trim(),
-        custom_answers: Array.isArray(customAnswers) ? customAnswers : [],
-        claim_metadata,
+        first_name: String(firstName ?? '').trim(),
+        last_name: String(lastName ?? '').trim(),
+        student_id: String(studentId ?? '').trim(),
+        student_email: String(studentEmail ?? '').trim(),
+        venmo_username: String(venmoUsername ?? '').trim(),
+        custom_answers: safeCustomAnswers,
+        claim_metadata: safeClaimMetadata,
       })
 
       if (insertErr) {
+        // Unique constraint safety net: if a response already exists for this token, treat as already claimed.
+        if ((insertErr as { code?: string } | null)?.code === '23505') {
+          // Best-effort: ensure token status converges to "found" even if a prior claim failed mid-flight.
+          try {
+            await supabase.from('tokens').update({ status: 'found' }).eq('id', tokenId)
+          } catch {}
+          return { success: false, error: 'This token has already been claimed.' }
+        }
         console.error('[submitClaim] ❌ Response insert error:', {
           message: insertErr.message,
           details: insertErr.details,
@@ -263,29 +296,48 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
 
       if (updateErr) {
         console.error('[submitClaim] token update error:', updateErr.message)
-        return { success: false, error: 'Could not update token.' }
+        // Best-effort: retry with minimal payload (status only) to reduce inconsistent states.
+        try {
+          await supabase.from('tokens').update({ status: 'found' }).eq('id', tokenId)
+        } catch {}
+        // Non-fatal: response was saved; avoid prompting a retry that would create duplicates.
+        return { success: true }
       }
 
       return { success: true }
     } catch (err) {
+      let tokenIdLog: unknown = undefined
+      try {
+        tokenIdLog = input != null && typeof input === 'object' ? (input as { tokenId?: unknown }).tokenId : undefined
+      } catch {
+        tokenIdLog = '(unable to read)'
+      }
       console.error('[submitClaim] ❌ DB exception (inner catch):', {
         error: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
         name: err instanceof Error ? err.name : typeof err,
-        tokenId: input.tokenId,
+        tokenId: tokenIdLog,
       })
       return { success: false, error: 'Something went wrong.' }
     }
   } catch (err) {
+    let inputSummary: Record<string, unknown> = {}
+    try {
+      if (input != null && typeof input === 'object') {
+        inputSummary = {
+          tokenId: (input as { tokenId?: unknown }).tokenId,
+          campaignId: (input as { campaignId?: unknown }).campaignId,
+          studentEmail: (input as { studentEmail?: unknown }).studentEmail,
+        }
+      }
+    } catch {
+      inputSummary = { _logError: 'Could not read input' }
+    }
     console.error('[submitClaim] ❌ Unexpected error (outer catch):', {
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
       name: err instanceof Error ? err.name : typeof err,
-      input: {
-        tokenId: input.tokenId,
-        campaignId: input.campaignId,
-        studentEmail: input.studentEmail,
-      },
+      input: inputSummary,
     })
     return { success: false, error: 'Something went wrong.' }
   }
@@ -312,7 +364,11 @@ export async function getTokenForClaim(tokenId: string) {
       }
       if (!token) return null
 
-      const campaignId = token.campaign_id
+      const rawCampaignId = (token as { campaign_id?: unknown }).campaign_id
+      const campaignId =
+        typeof rawCampaignId === 'string' && rawCampaignId.trim().length > 0 && isValidUUID(rawCampaignId.trim())
+          ? rawCampaignId.trim()
+          : null
       let campaign: unknown = null
       if (campaignId) {
         // Use maybeSingle() so missing campaign doesn't throw
