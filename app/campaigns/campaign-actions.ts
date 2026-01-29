@@ -4,7 +4,8 @@ import { createServerSupabase } from '@/lib/supabase-server'
 import { CAMPAIGN_REQUIRED_FIELDS } from '@/types'
 import type { CampaignRequiredField, CampaignQuestion } from '@/types'
 
-const ALLOWED_REQUIRED_FIELD_KEYS = new Set(CAMPAIGN_REQUIRED_FIELDS.map((f) => f.key))
+// Store as Set<string> because JSON payloads provide string keys (runtime validation still enforced).
+const ALLOWED_REQUIRED_FIELD_KEYS = new Set<string>(CAMPAIGN_REQUIRED_FIELDS.map((f) => f.key))
 
 const SUPER_ADMIN_ONLY = 'Only SUPER_ADMIN can perform this action.'
 
