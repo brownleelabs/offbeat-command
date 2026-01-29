@@ -1,0 +1,75 @@
+CAMPAIGNS TAB — PLANNING AGENT SPEC
+====================================
+Use this document to implement improvements to the Campaigns tab and its management. Scope: Campaigns only (no fleet operations or token-assignment features).
+
+
+CONTEXT: WHAT CAMPAIGNS ARE IN THIS PROJECT
+-------------------------------------------
+- Campaigns are the data-collection engine: surveys tied to an organization, with required KYC-style fields and up to 10 custom questions.
+- Lifecycle: draft → active → inactive. Only active, non-archived, non-deleted campaigns accept claims.
+- Responses are immutable and tied to campaign_id for audit and payout. All mutations are SUPER_ADMIN–gated server actions.
+- Campaigns tab: list (search, pagination, show archived/deleted, batch archive/delete/restore/unarchive, pin), create campaign form, campaign detail page (edit draft, launch, archive, Response Ledger).
+
+
+OUT OF SCOPE / DO NOT DO
+------------------------
+- Do NOT add a "Copy campaign link" or "Share link" feature. The product is built on physical tethering: you need the token. Sharing a campaign URL would work against that mission.
+- Do NOT mix in fleet operations (e.g. bulk assign campaign to tokens) in this spec; that can be done later.
+
+
+RESPONSE LEDGER: DATA VOLUME AND UI INTENT
+------------------------------------------
+- We need to support collecting and storing up to 10,000 responses per campaign over time (for export and reporting). Not all will be "live" at once; campaigns may sit and accumulate responses.
+- The Response Ledger on the campaign detail page is for reviewing the most recent submissions in real time. It should:
+  - Allow the system to store/retrieve up to 10,000 responses per campaign (DB/API design).
+  - In the UI, show the most recent submissions (e.g. paginated or "first N" with a clear cap label like "Showing most recent 200 of N" when total > 200).
+  - Support exporting or accessing the full set of responses (e.g. export all up to 10k) so admins can "let a campaign sit and export all the responses" later.
+
+
+IMPROVEMENTS TO IMPLEMENT
+--------------------------
+
+1. Status filter in list
+   - listCampaigns already supports status?: 'draft' | 'active' | 'inactive'. The dashboard does not pass it.
+   - Add a small filter in the Campaigns list header (e.g. "All / Draft / Active / Inactive") and pass the selected value into listCampaigns.
+
+2. Rows-per-page selector
+   - Deal Desk has a "Rows" dropdown (25/50/100); Campaigns use a fixed page size of 50.
+   - Add the same "Rows" control and wire it to listCampaigns' pageSize for consistency and flexibility.
+
+3. Response Ledger cap label
+   - On the campaign detail page, the Response Ledger loads a limited set of responses (e.g. most recent 200). When the total response count exceeds that limit, show a line above the table such as: "Showing most recent 200 of N responses" so admins know the ledger is a sliding window of recent submissions.
+   - Ensure the backend supports storing and querying up to 10,000 responses per campaign where needed (e.g. for export or count).
+
+4. Duplicate campaign
+   - Add a "Duplicate" action (e.g. from the list row or from the campaign detail page) that creates a new draft with the same organization and questions and a name like "Copy of <name>" using the existing insertCampaign payload (no new server action required beyond what exists).
+
+5. Deactivate (active → inactive)
+   - The detail page has "Launch" (draft → active) and "Archive," but no way to set an active campaign to inactive (stop new claims, keep campaign visible).
+   - Add a "Deactivate" button when status === 'active' that calls updateCampaign(id, { status: 'inactive' }).
+
+6. Empty-questions hint via tooltip
+   - In the Create Campaign form, add a small "?" icon next to the "Additional questions (up to 10)" label. On hover (tooltip), show: "Optional. Leave blank to use only required fields."
+   - Deliver this only via the tooltip; do not add a permanent line of text in the form body.
+
+7. Optional: Recent activity (audit log)
+   - campaign_audit_log is written on create/launch/update/archive/delete/restore/view/pin but is not shown anywhere.
+   - Add a small collapsible "Recent activity" on the campaign detail page showing the last 5–10 audit events (event_type, at, optional actor). This requires a read from campaign_audit_log by campaign_id (e.g. a thin server helper or existing module extended to return recent log rows).
+
+
+PRIORITY ORDER (suggested for planning)
+---------------------------------------
+- High: 1 (status filter), 2 (rows selector), 4 (duplicate), 5 (deactivate).
+- Medium: 3 (Response Ledger cap label + ensure 10k responses per campaign is supported where needed), 6 (tooltip for empty questions).
+- Optional: 7 (recent activity).
+
+
+FILES / AREAS TO TOUCH (minimal)
+---------------------------------
+- app/dashboard-client.tsx — CampaignsTab: status filter UI, rows-per-page selector, duplicate action (if from list).
+- app/campaigns/[id]/page.tsx — detail: Deactivate button, Response Ledger cap label, duplicate action (if from detail), optional Recent activity.
+- app/campaigns/campaign-actions.ts — listCampaigns already supports status and pageSize; add any server helper for recent audit log or response count/cap if needed.
+- Ensure responses table / queries support up to 10,000 rows per campaign for count and export (migrations or existing schema already may; verify and document).
+
+
+END OF SPEC

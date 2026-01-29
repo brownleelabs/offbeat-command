@@ -16,6 +16,7 @@ export default function SchoolsPage() {
       const { data } = await supabase
         .from("organizations")
         .select("id, name, slug")
+        .eq("type", "school")
         .order("name");
       setOrgs((data as OrgRow[]) ?? []);
     })().finally(() => setLoading(false));
@@ -24,17 +25,14 @@ export default function SchoolsPage() {
   return (
     <div className="min-h-screen bg-background p-6 text-foreground">
       <div className="mx-auto max-w-4xl">
-        <h1 className="mb-2 text-2xl font-bold tracking-tight text-primary">
-          Select Your School
+        <h1 className="mb-8 text-2xl font-bold tracking-tight text-primary">
+          We will be live soon! Stay tuned!
         </h1>
-        <p className="mb-8 text-muted-foreground">
-          Choose your campus to see where treasure is hidden.
-        </p>
 
         {loading ? (
           <p className="text-muted-foreground">Loading schools…</p>
         ) : orgs.length === 0 ? (
-          <p className="text-muted-foreground">No schools available yet.</p>
+          <p className="text-muted-foreground">We will be live soon! Stay tuned!</p>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {orgs.map((org) => (

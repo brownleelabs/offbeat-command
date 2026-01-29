@@ -2,23 +2,29 @@ import { createClient } from "@supabase/supabase-js";
 import ClaimForm from "@/components/claim-form";
 import type { Campaign, Token } from "@/types";
 
+// STRICT REGEX: Anchors (^...$) prevent invalid IDs from hitting the DB
 const UUID_REGEX =
-  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function isValidUUID(id: string): boolean {
+  return UUID_REGEX.test(id);
+}
 
 function normalizeClaimId(raw: string): string {
   let s = String(raw ?? "");
   try {
     s = decodeURIComponent(s);
   } catch {
-    // leave as-is if decoding fails
+    // leave as-is
   }
   s = s.replace(/%20/g, "").replace(/\s+/g, " ").trim();
-  const match = s.match(UUID_REGEX);
+  
+  // Extract UUID if present
+  const match = s.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
   if (match) return match[0].toLowerCase();
   return s;
 }
 
-// Lazy load helper – prevents "supabaseKey is required" crash at startup
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -39,52 +45,67 @@ function getSupabaseAdmin() {
 async function getTokenForClaim(
   id: string
 ): Promise<{ token: Token; campaign: Campaign | null } | null> {
+  // 1. FAIL FAST: Validates strictly. If not UUID, return null (prevents 500 DB error).
+  if (!isValidUUID(id)) {
+     console.warn(`⚠️ [Claim] Invalid UUID format: ${id}`);
+     return null;
+  }
+
   const supabaseAdmin = getSupabaseAdmin();
-
   if (!supabaseAdmin) {
-    console.error("❌ [Claim] Service Role Client failed to initialize.");
+    console.error("❌ [Claim] Client init failed.");
     return null;
   }
 
-  const normalizedId = normalizeClaimId(id);
-  console.log(`🔍 [Claim] Looking up token: ${normalizedId}`);
+  // 2. SAFETY NET: Wraps DB call in try/catch to stop server crashes.
+  try {
+    const { data: token, error } = await supabaseAdmin
+      .from("tokens")
+      .select("id, lat, lng, status, organization_id, campaign_id")
+      .eq("id", id)
+      .maybeSingle();
 
-  const { data: token, error } = await supabaseAdmin
-    .from("tokens")
-    .select("id, lat, lng, status, organization_id, campaign_id")
-    .eq("id", normalizedId)
-    .maybeSingle();
+    if (error) {
+      console.error("❌ [Claim] DB Error:", error.message);
+      return null;
+    }
 
-  if (error) {
-    console.error("❌ [Claim] DB Error:", error.message);
-    return null;
+    if (!token) {
+      console.warn("❌ [Claim] Token not found in DB:", id);
+      return null;
+    }
+
+    const tokenData: Token = {
+      id: token.id,
+      lat: Number(token.lat) || 0,
+      lng: Number(token.lng) || 0,
+      status: token.status === "found" ? "found" : "active",
+      organization_id: token.organization_id ?? null,
+    };
+
+    let campaign: Campaign | null = null;
+    const rawCampaignId = token.campaign_id;
+    const campaignId =
+      typeof rawCampaignId === "string" &&
+      rawCampaignId.trim().length > 0 &&
+      isValidUUID(rawCampaignId.trim())
+        ? rawCampaignId.trim()
+        : null;
+    if (campaignId) {
+      const { data: camp } = await supabaseAdmin
+        .from("campaigns")
+        .select("*")
+        .eq("id", campaignId)
+        .single();
+      if (camp) campaign = camp as Campaign;
+    }
+
+    return { token: tokenData, campaign };
+
+  } catch (err) {
+    console.error("🔥 [Claim] CRITICAL EXCEPTION:", err);
+    return null; // Return null instead of crashing
   }
-
-  if (!token) {
-    console.error("❌ [Claim] Token not found:", normalizedId);
-    return null;
-  }
-
-  const tokenData: Token = {
-    id: (token as { id: string }).id,
-    lat: Number((token as { lat: number }).lat) || 0,
-    lng: Number((token as { lng: number }).lng) || 0,
-    status: (token as { status: string }).status === "found" ? "found" : "active",
-    organization_id: (token as { organization_id?: string | null }).organization_id ?? null,
-  };
-
-  const campaignId = (token as { campaign_id?: string | null }).campaign_id ?? null;
-  let campaign: Campaign | null = null;
-  if (campaignId) {
-    const { data: camp } = await supabaseAdmin
-      .from("campaigns")
-      .select("*")
-      .eq("id", campaignId)
-      .single();
-    campaign = (camp as Campaign) ?? null;
-  }
-
-  return { token: tokenData, campaign };
 }
 
 export default async function ClaimPage({
@@ -94,47 +115,21 @@ export default async function ClaimPage({
 }) {
   const { id } = await params;
   const rawId = Array.isArray(id) ? id[0] : id ?? "";
-  const idStr = typeof rawId === "string" ? rawId : "";
-
-  if (!idStr) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="text-2xl font-bold text-red-500">INVALID LINK</h1>
-        <p className="mt-4 text-zinc-400">No token ID in the URL.</p>
-      </div>
-    );
+  const normalizedId = normalizeClaimId(rawId);
+  
+  if (!normalizedId) {
+    return <ErrorScreen title="INVALID LINK" msg="No token ID provided." />;
   }
 
-  // 1. Detect configuration error (key missing) before calling getTokenForClaim
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="text-2xl font-bold text-red-500">CONFIGURATION ERROR</h1>
-        <p className="mt-4 text-zinc-400">
-          The server is missing the <code className="rounded bg-zinc-800 px-1">SUPABASE_SERVICE_ROLE_KEY</code>.
-        </p>
-        <p className="mt-2 text-sm text-zinc-500">Check .env.local and restart server.</p>
-      </div>
-    );
-  }
+  // Pass STRICT normalized ID to safe function
+  const result = await getTokenForClaim(normalizedId);
 
-  const result = await getTokenForClaim(idStr);
-
-  // 2. Token not found (or DB error)
   if (!result) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
-        <h1 className="mb-4 text-4xl font-bold text-red-500">TOKEN NOT FOUND</h1>
-        <p className="max-w-md text-center text-zinc-400">
-          This token ID ({idStr.slice(0, 8)}...) does not exist or the link is invalid.
-        </p>
-      </div>
-    );
+    return <ErrorScreen title="TOKEN NOT FOUND" msg="ID is invalid or does not exist." />;
   }
 
   const { token, campaign } = result;
 
-  // 3. Already claimed
   if (token.status === "found") {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
@@ -150,5 +145,14 @@ export default async function ClaimPage({
         <ClaimForm tokenId={token.id} campaign={campaign} />
       </div>
     </main>
+  );
+}
+
+function ErrorScreen({ title, msg }: { title: string; msg: string }) {
+  return (
+    <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
+      <h1 className="mb-4 text-4xl font-bold text-red-500">{title}</h1>
+      <p className="max-w-md text-center text-zinc-400">{msg}</p>
+    </div>
   );
 }

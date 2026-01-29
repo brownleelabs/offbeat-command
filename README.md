@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Campus Mobility Project Control Center
+
+This is the Campus Mobility Project Control Center, built with the Next.js App Router and Supabase.
+
+The root `/` route behaves as:
+
+- **Unauthenticated visitors:** See a simple landing page with project overview, a **Sign in** button, and a **Request access** form.
+- **Authenticated users:** See the admin dashboard (fleet, campaigns, map, settings).
 
 ## Getting Started
 
-First, run the development server:
+Install dependencies and run the dev server:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000 in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Create a `.env.local` file in the project root with at least:
 
-## Learn More
+```bash
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 
-To learn more about Next.js, take a look at the following resources:
+# Mapbox
+NEXT_PUBLIC_MAPBOX_TOKEN=
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# Request access form (landing page)
+RESEND_API_KEY=
+ACCESS_REQUEST_EMAIL=
+# Optional: override default From address for Resend
+RESEND_FROM=
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `RESEND_API_KEY` – API key from [Resend](https://resend.com/docs) (required for the Request access form to send email).
+- `ACCESS_REQUEST_EMAIL` – email address where Request access submissions are sent.
+- `RESEND_FROM` – optional from-address, e.g. `"Campus Mobility <no-reply@yourdomain.edu>"`. If omitted, a Resend default is used.
 
-## Deploy on Vercel
+## Database: access_requests
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The landing page **Request access** form:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Inserts a row into the `public.access_requests` table (via a server action using the Supabase service role).
+- Sends an email via Resend to `ACCESS_REQUEST_EMAIL` with the submitted details.
+
+The migration for this table lives in:
+
+- `supabase/migrations/20260129_000009_access_requests.sql`
+

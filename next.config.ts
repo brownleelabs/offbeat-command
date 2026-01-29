@@ -11,11 +11,13 @@ const nextConfig: NextConfig = {
             value: [
               "default-src 'self'",
               // unsafe-eval: required by some deps (e.g. Supabase/Mapbox); avoid if you can remove eval usage
-              "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://*.mapbox.com",
+              "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://*.mapbox.com https://vercel.live",
               "style-src 'self' 'unsafe-inline' https://*.mapbox.com",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.mapbox.com",
-              "frame-src 'self'",
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.mapbox.com https://vercel.live",
+              "frame-src 'self' https://vercel.live",
               "img-src 'self' data: blob: https:",
+              // Allow blob: workers (used by Next/Turbopack and some libs)
+              "worker-src 'self' blob:",
             ].join("; "),
           },
         ],
