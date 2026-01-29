@@ -220,7 +220,7 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       } catch {}
 
       const claim_metadata: Record<string, unknown> = {
-        ...(typeof clientMetadata === 'object' ? clientMetadata : {}),
+        ...(clientMetadata != null && typeof clientMetadata === 'object' ? clientMetadata : {}),
         _server: serverHeaders,
         _submitted_at: new Date().toISOString(),
       }
@@ -251,7 +251,7 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       }
 
       const tokenUpdate: Record<string, unknown> = { status: 'found' }
-      if (lat != null && lng != null) {
+      if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
         tokenUpdate.lat = lat
         tokenUpdate.lng = lng
       }
