@@ -813,14 +813,20 @@ export function DealDeskContent() {
 
   async function togglePinnedScenario(row: DealScenarioRow) {
     setPinError("");
+    const nextPinned = !(row.pinned ?? false);
     try {
-      const nextPinned = !(row.pinned ?? false);
       const res = await updateDealScenarioPinned(row.id, nextPinned);
       if (!res.success) {
         setPinError(res.error);
         return;
       }
-      await loadScenarios();
+      // Optimistic update so modal and list reflect new state immediately (no wait for refetch).
+      setScenarios((prev) =>
+        prev.map((s) => (s.id === row.id ? { ...s, pinned: nextPinned } : s))
+      );
+      setPreviewScenario((prev) =>
+        prev?.id === row.id ? { ...prev, pinned: nextPinned } : prev
+      );
     } catch (err) {
       setPinError(err instanceof Error ? err.message : "Pin update failed.");
     }
@@ -2308,14 +2314,52 @@ export function DealDeskContent() {
                     </div>
                     </div>
 
-                    {previewScenario.score_explanation && (
-                      <div className="rounded-xl border border-accent/50 bg-background/30 p-4 text-sm">
-                        <div className="mb-2 text-xs font-semibold text-muted-foreground">Why this score?</div>
-                        <p className="leading-relaxed text-muted-foreground">
-                          {previewScenario.score_explanation}
-                        </p>
-                      </div>
-                    )}
+                    {previewScenario.score_explanation && (() => {
+                      const raw = previewScenario.score_explanation ?? "";
+                      const label = previewDerived?.dealScore?.label;
+                      // If the explanation starts with the label + range (e.g. "STRONG FIT (scores 75–89):"),
+                      // strip that prefix so we don't duplicate the label that already appears in "Signal".
+                      const cleaned = label
+                        ? raw.replace(
+                            new RegExp(`^${label}\\s*\\([^)]*\\)?:\\s*`, "i"),
+                            ""
+                          ).trim()
+                        : raw;
+
+                      return (
+                        <div className="rounded-xl border border-accent/50 bg-background/30 p-4 text-sm">
+                          <div className="mb-2 flex items-baseline justify-between gap-2">
+                            {previewDerived?.dealScore && (
+                              <div className="text-xs font-mono">
+                                <span className="text-muted-foreground">Signal:</span>{" "}
+                                <span
+                                  className={[
+                                    "font-semibold",
+                                    previewDerived.dealScoreClass ?? "",
+                                  ].join(" ")}
+                                >
+                                  {previewDerived.dealScore.label}
+                                </span>
+                                {previewDerived.dealScore.score != null && (
+                                  <>
+                                    {" "}
+                                    <span className="text-muted-foreground">·</span>{" "}
+                                    <span className={previewDerived.dealScoreClass ?? ""}>
+                                      {previewDerived.dealScore.score}/100
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          {cleaned && (
+                            <p className="leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                              {cleaned}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Key KPIs (persisted + derived): 2 rows of 3 */}
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -2517,37 +2561,25 @@ export function DealDeskContent() {
                     )}
                   </div>
 
-                  {/* Right Column: Deal Summary */}
+                  {/* Right Column: Deal Summary (full narrative as saved) */}
                   <div className="lg:min-h-0">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Deal summary
+                    </div>
                     {previewScenario.deal_summary && (
-                      <div className="rounded-xl border border-accent bg-muted p-4 text-sm leading-relaxed">
-                        <div className="mb-3 text-sm text-muted-foreground">
-                          The Offbeat Yield Engine (OYE) classifies this opportunity as{" "}
-                          <span className="font-semibold">{previewDerived?.zoneStatus ?? "—"}</span>{" "}
-                          with a Deal Score of{" "}
-                          <span className={["font-semibold", previewDerived?.dealScoreClass ?? ""].join(" ")}>
-                            {previewDerived?.dealScore?.score != null
-                              ? `${previewDerived.dealScore.score}/100`
-                              : "—"}
-                          </span>
-                          . This deal is{" "}
-                          <span className={["font-semibold", previewDerived?.dealScoreClass ?? ""].join(" ")}>
-                            {previewDerived?.dealScore?.label != null
-                              ? previewDerived.dealScore.label.toLowerCase()
-                              : "—"}
-                          </span>
-                          .
-                        </div>
-
-                        <div className="space-y-3 text-foreground">
+                      <div className="rounded-xl border border-accent/50 bg-background/30 p-4 text-sm leading-relaxed">
+                        <div className="space-y-3 text-muted-foreground">
                           {(previewScenario.deal_summary as string)
                             .split(/\n\n+/)
-                            .filter((p) => p.trim())
-                            .map((paragraph, i) => (
-                              <p key={i}>
-                                {paragraph.trim()}
-                              </p>
-                            ))}
+                            .map((paragraph, i) => {
+                              const trimmed = paragraph.trim();
+                              if (!trimmed) return null;
+                              return (
+                                <p key={i}>
+                                  {trimmed}
+                                </p>
+                              );
+                            })}
                         </div>
                       </div>
                     )}
@@ -2557,33 +2589,52 @@ export function DealDeskContent() {
 
               {/* Footer */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-accent/40 p-6">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      loadScenario(previewScenario);
-                      setCompareOpen(false);
-                      setPreviewScenario(null);
-                    }}
-                    className="inline-flex items-center gap-2 rounded bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
-                  >
-                    Load into Deal Desk
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      duplicateScenarioIntoDraft(previewScenario);
-                      setCompareOpen(false);
-                      setPreviewScenario(null);
-                    }}
-                    className="inline-flex items-center gap-2 rounded border border-accent bg-background px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-background/80"
-                  >
-                    Duplicate into Draft
-                  </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        loadScenario(previewScenario);
+                        setCompareOpen(false);
+                        setPreviewScenario(null);
+                      }}
+                      className="inline-flex items-center gap-2 rounded bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground"
+                    >
+                      Load into Deal Desk
+                    </button>
+                    <InlineHelp
+                      ariaLabel="Explain Load into Deal Desk action"
+                      heading="Load into Deal Desk"
+                      text="Loads this saved scenario back into the calculator as the active draft and keeps its identity. Saving again will update this same scenario record (new version on top of the same thread)."
+                    />
+                  </div>
+                  <div className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        duplicateScenarioIntoDraft(previewScenario);
+                        setCompareOpen(false);
+                        setPreviewScenario(null);
+                      }}
+                      className="inline-flex items-center gap-2 rounded border border-accent bg-background px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-background/80"
+                    >
+                      Duplicate into Draft
+                    </button>
+                    <InlineHelp
+                      ariaLabel="Explain Duplicate into Draft action"
+                      heading="Duplicate into Draft"
+                      text="Creates a new draft from this scenario without touching the original record. On save, a fresh scenario is created in the same scenario group so you can compare versions side by side."
+                    />
+                  </div>
                   <button
                     type="button"
                     onClick={() => togglePinnedScenario(previewScenario)}
-                    className="inline-flex items-center gap-2 rounded border border-accent bg-background px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/80"
+                    className={[
+                      "inline-flex items-center gap-2 rounded border px-3 py-2 text-xs font-mono hover:bg-background/80",
+                      previewScenario.pinned
+                        ? "border-amber-400 bg-amber-500/10 text-amber-300"
+                        : "border-accent bg-background text-muted-foreground",
+                    ].join(" ")}
                   >
                     {previewScenario.pinned ? "★ PINNED" : "☆ PIN"}
                   </button>
