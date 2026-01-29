@@ -250,7 +250,7 @@ function computeDealScore(input: {
   tdv: number | null;
   endowment: number | null; // Required for context-aware friction
   canCompute: boolean;
-}): { score: number; rawEconomicScore: number; label: string } {
+}): { score: number; rawEconomicScore: number; label: string; breakdown: { s_eps: number; s_alloc: number; s_recoup: number; s_friction: number } | null } {
   const { zone, eps, allocation, feeRecoupYears, tdv, endowment, canCompute } = input;
 
   if (
@@ -262,7 +262,7 @@ function computeDealScore(input: {
     tdv == null ||
     endowment == null
   ) {
-    return { score: 1, rawEconomicScore: 1, label: "MODEL INCOMPLETE" };
+    return { score: 1, rawEconomicScore: 1, label: "MODEL INCOMPLETE", breakdown: null };
   }
 
   const s_eps = getScoreEps(eps);
