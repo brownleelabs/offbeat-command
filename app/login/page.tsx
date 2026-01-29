@@ -39,10 +39,11 @@ export default function LoginPage() {
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 text-foreground">
       <div className="w-full max-w-sm rounded-xl border border-accent bg-muted p-6 shadow-lg">
         <h1 className="mb-2 text-center text-xl font-bold tracking-tight text-primary">
-          Campus Mobility Project Control Center
+          <span className="block">Campus Mobility Project</span>
+          <span className="block">Control Center</span>
         </h1>
         <p className="mb-6 text-center text-sm text-muted-foreground">
-          Sign in to access the dashboard
+          Sign in for access
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">

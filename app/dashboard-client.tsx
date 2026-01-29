@@ -623,7 +623,7 @@ export default function AdminDashboard() {
           >
             LOGOUT
           </button>
-          <span>Ver 2.0.1</span>
+          <span>Ver 3.0.0</span>
         </div>
       </nav>
 
@@ -846,6 +846,9 @@ function SystemStatus() {
         </div>
         {showTooltip && (
           <div className="absolute left-0 top-6 z-[100] w-80 rounded-lg border border-white/10 bg-slate-900 p-3 text-xs shadow-xl backdrop-blur-sm">
+            <div className="mb-2 border-b border-white/10 pb-2 text-slate-400">
+              Status is pegged to the BENJI interest rate (streamed live via API) and mapped to Offbeat YOE Stages.
+            </div>
             <div className="font-mono font-semibold text-white">
               Zone {zone.id}: {zone.name}
             </div>
@@ -2297,7 +2300,7 @@ function SettingsTab({
     <div className="mx-auto max-w-[98vw] px-4 py-8">
       <h2 className="mb-2 text-2xl font-bold">Create user</h2>
       <p className="mb-4 text-sm text-muted-foreground">
-        Add a new user with email and password. Choose role and optionally assign an organization (suggested for ORG_ADMIN and STUDENT).
+        Add a new user with email and password. Choose role and assign an organization
       </p>
       <form onSubmit={handleCreateUser} className="mb-10 rounded-xl border border-accent bg-muted p-6">
         <div className="flex flex-wrap gap-4">
@@ -2512,7 +2515,7 @@ function SettingsTab({
 
       <h2 className="mb-2 mt-12 text-2xl font-bold">Organizations</h2>
       <p className="mb-4 text-sm text-muted-foreground">
-        Add schools or institutions (e.g. Offbeat Options). Schools appear in Fleet and Campaigns; institutions appear only in user assignment.
+        Add schools or institutions. Schools appear in Fleet and Campaigns; institutions appear only in user assignment.
       </p>
       <form onSubmit={handleCreateOrganization} className="mb-6 rounded-xl border border-accent bg-muted p-6">
         <div className="flex flex-wrap gap-4">

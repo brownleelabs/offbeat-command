@@ -36,19 +36,6 @@ export default function LandingPage() {
 
   return (
     <div className="flex h-screen min-h-screen flex-col overflow-hidden bg-background text-foreground">
-      {/* Nav: minimal, one primary action */}
-      <nav className="flex shrink-0 items-center justify-between px-6 py-4 sm:px-8">
-        <Link
-          href="/"
-          className="text-[15px] font-medium tracking-tight text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-        >
-          Offbeat Options
-        </Link>
-        <span className="text-[15px] font-medium tracking-tight text-foreground">
-          Austin, Texas
-        </span>
-      </nav>
-
       <main className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 py-4 sm:px-8">
         <div className="mx-auto grid w-full max-w-4xl grid-cols-1 items-center gap-8 lg:grid-cols-[1fr,380px] lg:gap-12">
           {/* Hero: typography-led, bigger subtext */}
