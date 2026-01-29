@@ -1962,7 +1962,7 @@ export function DealDeskContent() {
               )}
               <button
                 type="button"
-                onClick={loadScenarios}
+                onClick={() => void loadScenarios()}
                 disabled={loadingScenarios}
                 className="rounded border border-accent bg-muted px-3 py-2 text-xs font-mono text-muted-foreground hover:bg-background/60 disabled:opacity-50"
               >
