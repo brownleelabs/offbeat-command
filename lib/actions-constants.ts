@@ -12,6 +12,8 @@ export type SubmitClaimInput = {
   lat?: number | null
   lng?: number | null
   claimMetadata?: Record<string, unknown> | null
+  /** NFC SUN (Secure Unique NFC) signature from URL when REQUIRE_SUN_SIGNATURE is set. */
+  signature?: string | null
 }
 
 export type SubmitClaimResult = { success: true } | { success: false; error: string }

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { getToken, deleteToken, loadFundsToToken } from "@/app/fleet/fleet-actions";
 import { useDashboard } from "@/components/dashboard-context";
 import { ArrowLeft, Copy, Trash2, DollarSign } from "lucide-react";
+import type { FleetTokenDetail } from "@/types";
 
 function isUuidLike(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
@@ -33,24 +34,7 @@ export default function FleetAssetDetailPage() {
   const [fundAmount, setFundAmount] = useState<string>("25");
   const [funding, setFunding] = useState(false);
   const [fundError, setFundError] = useState<string | null>(null);
-  const [token, setToken] = useState<{
-    id: string;
-    lat: number;
-    lng: number;
-    status: "active" | "found";
-    organization_id: string | null;
-    campaign_id: string | null;
-    balance?: number;
-    created_at?: string | null;
-    redeemed_at?: string | null;
-    reloaded_at?: string | null;
-    campaigns?: { name: string } | null;
-    organizations?: { name: string } | null;
-    claim_url?: string;
-    claim_url_restricted?: boolean;
-    redeemer?: { first_name: string; last_name: string; student_email: string; student_id: string } | null;
-    first_redeemer?: { first_name: string; last_name: string; student_email: string; student_id: string } | null;
-  } | null>(null);
+  const [token, setToken] = useState<FleetTokenDetail | null>(null);
 
   useEffect(() => {
     if (!id || !isUuidLike(id)) {
@@ -171,7 +155,7 @@ export default function FleetAssetDetailPage() {
       setFundError("Enter an amount from $1 to $25. You cannot load $0; use Remove funds in Settings to zero a token.");
       return;
     }
-    if (token.status === "found") {
+    if (token.status === "REDEEMED") {
       const confirmed = window.confirm(
         "This token has already been redeemed. Adding funds will not change who redeemed it. Add funds anyway?"
       );
@@ -228,16 +212,16 @@ export default function FleetAssetDetailPage() {
                 <td className="p-4">
                   <span
                     className={
-                      token.status === "active"
+                      token.status === "ACTIVE"
                         ? "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-400"
                         : "rounded px-2 py-1 font-mono text-[10px] font-bold uppercase bg-white/5 text-muted-foreground"
                     }
                   >
-                    {token.status === "active" ? "Active (value sitting)" : "Redeemed"}
+                    {token.status === "ACTIVE" ? "Active (value sitting)" : "Redeemed"}
                   </span>
                 </td>
               </tr>
-              {token.status === "active" && token.created_at && (
+              {token.status === "ACTIVE" && token.created_at && (
                 <tr>
                   <td className="p-4 font-medium text-muted-foreground">Value sitting since</td>
                   <td className="p-4 text-xs">{new Date(token.created_at).toLocaleString()}</td>
@@ -291,7 +275,7 @@ export default function FleetAssetDetailPage() {
                   <td className="p-4 text-xs">{new Date(token.reloaded_at).toLocaleString()}</td>
                 </tr>
               )}
-              {token.status === "active" && token.first_redeemer && (token.first_redeemer.first_name || token.first_redeemer.last_name || token.first_redeemer.student_email || token.first_redeemer.student_id) && (
+              {token.status === "ACTIVE" && token.first_redeemer && (token.first_redeemer.first_name || token.first_redeemer.last_name || token.first_redeemer.student_email || token.first_redeemer.student_id) && (
                 <>
                   <tr>
                     <td className="p-4 font-medium text-muted-foreground">First redeemed by (name)</td>

@@ -5,6 +5,9 @@ import { getSupabaseService, requireSuperAdmin, requireProfile } from '@/lib/aut
 import { getClaimUrl } from '@/lib/constants'
 import { isUuidLike, clampInt, BATCH_LIMIT } from '@/lib/validation'
 import type { BulkAssignToSchoolResult } from '@/lib/actions-constants'
+import { canTransition } from '@/lib/token-logic'
+import { normalizeTokenStatus } from '@/types'
+import type { TokenStatus, MapTokenRow, FleetTokenDetail } from '@/types'
 
 /** Fleet tab design max: pagination and total count cap (500k tokens). */
 const MAX_TOKENS_DESIGN = 500_000
@@ -90,7 +93,7 @@ export async function createTokens(count: number): Promise<CreateTokensResult> {
     const rows = Array.from({ length: n }, () => ({
       lat: 0,
       lng: 0,
-      status: 'active' as const,
+      status: 'DORMANT' as const,
       organization_id: null,
       campaign_id: null,
     }))
@@ -364,14 +367,17 @@ export async function reloadTokens(tokenIds: string[]): Promise<ReloadTokensResu
     const supabase = getSupabaseService()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
-    // Only update tokens that are currently redeemed (found); leave active unchanged; clear redeemed_at, set reloaded_at for audit.
+    // Only update tokens that are currently REDEEMED; set to DORMANT (Rain Barrel will re-activate with new asset_uuid).
+    if (!canTransition('REDEEMED', 'DORMANT')) {
+      return { success: false, error: 'Reload transition not allowed.' }
+    }
     const now = new Date().toISOString()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: updated, error } = await (supabase as any)
       .from('tokens')
-      .update({ status: 'active', redeemed_at: null, reloaded_at: now })
+      .update({ status: 'DORMANT', redeemed_at: null, reloaded_at: now, asset_uuid: null, balance: 0 })
       .in('id', ids)
-      .eq('status', 'found')
+      .eq('status', 'REDEEMED')
       .select('id')
 
     if (error) return { success: false, error: error.message ?? 'Update failed.' }
@@ -392,16 +398,6 @@ export async function reloadTokens(tokenIds: string[]): Promise<ReloadTokensResu
 // ---------------------------------------------------------------------------
 // List (map: bounded subset for map tab; same org scope as Fleet)
 // ---------------------------------------------------------------------------
-
-export type MapTokenRow = {
-  id: string
-  lat: number
-  lng: number
-  status: 'active' | 'found'
-  organization_id: string | null
-  campaign_id: string | null
-  redeemed_at: string | null
-}
 
 export type ListTokensForMapResult =
   | { success: true; tokens: MapTokenRow[] }
@@ -446,7 +442,7 @@ export async function listTokensForMap(
     const supabase = await createServerSupabase()
     let query = supabase
       .from('tokens')
-      .select('id, lat, lng, status, organization_id, campaign_id, redeemed_at')
+      .select('id, lat, lng, status, organization_id, campaign_id, redeemed_at, nfc_uid, asset_uuid')
       .limit(MAP_TOKENS_LIMIT)
       .order('id', { ascending: true })
 
@@ -475,10 +471,12 @@ export async function listTokensForMap(
       organization_id?: string | null
       campaign_id?: string | null
       redeemed_at?: string | null
+      nfc_uid?: string | null
+      asset_uuid?: string | null
     }) => {
       const lat = Number(r.lat)
       const lng = Number(r.lng)
-      const status = r.status === 'found' ? 'found' : 'active'
+      const status = normalizeTokenStatus(r.status)
       return {
         id: r.id,
         lat: Number.isFinite(lat) ? lat : 0,
@@ -487,6 +485,8 @@ export async function listTokensForMap(
         organization_id: r.organization_id ?? null,
         campaign_id: r.campaign_id ?? null,
         redeemed_at: typeof r.redeemed_at === 'string' ? r.redeemed_at : null,
+        nfc_uid: r.nfc_uid ?? null,
+        asset_uuid: r.asset_uuid ?? null,
       }
     })
     return { success: true, tokens }
@@ -534,7 +534,7 @@ export async function getMapAnalytics(
     let foundQuery = supabase
       .from('tokens')
       .select('id', { count: 'exact', head: true })
-      .eq('status', 'found')
+      .eq('status', 'REDEEMED')
     if (auth.organizationId != null) {
       foundQuery = foundQuery.eq('organization_id', auth.organizationId)
     } else if (orgIdFilter != null) {
@@ -566,6 +566,66 @@ export async function getMapAnalytics(
     }
   } catch {
     return { success: false, error: 'Failed to load map analytics.' }
+  }
+}
+
+/** Ghost/Shell/Live counts for Fleet dashboard (6-state model). */
+export type TokenStateCounts = {
+  minted: number
+  dormant: number
+  active: number
+  pending_settlement: number
+  redeemed: number
+  void: number
+}
+
+export type GetTokenStateCountsResult =
+  | { success: true; counts: TokenStateCounts }
+  | { success: false; error: string }
+
+/** Token counts by 6-state for Fleet tab (Ghost = MINTED, Shell = DORMANT, Live = ACTIVE). */
+export async function getTokenStateCounts(
+  organizationId?: string | null
+): Promise<GetTokenStateCountsResult> {
+  try {
+    const auth = await requireFleetAccess()
+    if (!auth.ok) return { success: false, error: auth.error }
+
+    const orgFilter =
+      organizationId != null && String(organizationId).trim() !== ''
+        ? String(organizationId).trim()
+        : null
+    if (orgFilter != null && !isUuidLike(orgFilter)) {
+      return { success: false, error: 'Invalid organization filter.' }
+    }
+
+    const supabase = await createServerSupabase()
+    const counts: TokenStateCounts = {
+      minted: 0,
+      dormant: 0,
+      active: 0,
+      pending_settlement: 0,
+      redeemed: 0,
+      void: 0,
+    }
+    const statuses: (keyof TokenStateCounts)[] = ['minted', 'dormant', 'active', 'pending_settlement', 'redeemed', 'void']
+    const dbStatuses: TokenStatus[] = ['MINTED', 'DORMANT', 'ACTIVE', 'PENDING_SETTLEMENT', 'REDEEMED', 'VOID']
+
+    await Promise.all(
+      dbStatuses.map(async (dbStatus, i) => {
+        const key = statuses[i]
+        let q = supabase.from('tokens').select('id', { count: 'exact', head: true }).eq('status', dbStatus)
+        if (auth.organizationId != null) q = q.eq('organization_id', auth.organizationId)
+        else if (orgFilter != null) q = q.eq('organization_id', orgFilter)
+        const { count, error } = await q
+        if (!error && typeof count === 'number' && count >= 0) {
+          counts[key] = Math.min(count, MAX_TOKENS_DESIGN)
+        }
+      })
+    )
+    return { success: true, counts }
+  } catch {
+    return { success: false, error: 'Failed to load token state counts.' }
   }
 }
 
@@ -655,7 +715,7 @@ export type ListTokensInput = {
   pageSize: number
   organizationId?: string | null
   campaignId?: string | null
-  status?: 'active' | 'found'
+  status?: TokenStatus
   searchQuery?: string
   orderBy?: FleetOrderBy
   orderDir?: FleetOrderDir
@@ -701,7 +761,7 @@ export async function listTokens<T = unknown>(input: ListTokensInput): Promise<L
     if (campaignIdFilter != null) {
       query = query.eq('campaign_id', campaignIdFilter)
     }
-    if (input.status === 'active' || input.status === 'found') {
+    if (input.status) {
       query = query.eq('status', input.status)
     }
     if (q) {
@@ -721,12 +781,17 @@ export async function listTokens<T = unknown>(input: ListTokensInput): Promise<L
 
     if (error) return { success: false, error: 'Failed to load tokens.' }
     const rows = Array.isArray(data) ? data : []
+    // Normalize status so Fleet UI and counts always agree (6-state)
+    const normalizedRows = rows.map((row: Record<string, unknown>) => ({
+      ...row,
+      status: normalizeTokenStatus(row.status),
+    }))
     const rawTotal = count ?? 0
     const total =
       typeof rawTotal === 'number' && Number.isFinite(rawTotal) && rawTotal >= 0
         ? Math.min(Math.floor(rawTotal), MAX_TOKENS_DESIGN)
         : 0
-    return { success: true, rows: rows as T[], total }
+    return { success: true, rows: normalizedRows as T[], total }
   } catch {
     return { success: false, error: 'Failed to load tokens.' }
   }
@@ -737,7 +802,7 @@ export async function listTokens<T = unknown>(input: ListTokensInput): Promise<L
 // ---------------------------------------------------------------------------
 
 export type GetTokenResult =
-  | { success: true; token: { id: string; lat: number; lng: number; status: 'active' | 'found'; organization_id: string | null; campaign_id: string | null; balance?: number; created_at?: string | null; redeemed_at?: string | null; reloaded_at?: string | null; campaigns?: { name: string } | null; organizations?: { name: string } | null; claim_url?: string; claim_url_restricted?: boolean; redeemer?: { first_name: string; last_name: string; student_email: string; student_id: string } | null; first_redeemer?: { first_name: string; last_name: string; student_email: string; student_id: string } | null } }
+  | { success: true; token: FleetTokenDetail }
   | { success: false; error: string }
 
 /** Single token by ID. Same auth/scoping as Fleet list; for asset detail page. */
@@ -754,7 +819,7 @@ export async function getToken(tokenId: string): Promise<GetTokenResult> {
     const supabase = await createServerSupabase()
     const { data, error } = await supabase
       .from('tokens')
-      .select('id, lat, lng, status, organization_id, campaign_id, balance, created_at, redeemed_at, reloaded_at, campaigns(name), organizations(name)')
+      .select('id, lat, lng, status, organization_id, campaign_id, balance, created_at, redeemed_at, reloaded_at, nfc_uid, asset_uuid, yield_source_id, campaigns(name), organizations(name)')
       .eq('id', id)
       .maybeSingle()
 
@@ -770,10 +835,10 @@ export async function getToken(tokenId: string): Promise<GetTokenResult> {
       }
     }
 
-    const row = data as { id: string; lat: number; lng: number; status: string; organization_id?: string | null; campaign_id?: string | null; balance?: number | null; created_at?: string | null; redeemed_at?: string | null; reloaded_at?: string | null; campaigns?: { name: string } | { name: string }[] | null; organizations?: { name: string } | { name: string }[] | null }
+    const row = data as { id: string; lat: number; lng: number; status: string; organization_id?: string | null; campaign_id?: string | null; balance?: number | null; created_at?: string | null; redeemed_at?: string | null; reloaded_at?: string | null; nfc_uid?: string | null; asset_uuid?: string | null; yield_source_id?: string | null; campaigns?: { name: string } | { name: string }[] | null; organizations?: { name: string } | { name: string }[] | null }
     let redeemer: { first_name: string; last_name: string; student_email: string; student_id: string } | null = null
     let first_redeemer: { first_name: string; last_name: string; student_email: string; student_id: string } | null = null
-    if (row.status === 'found') {
+    if (row.status === 'REDEEMED') {
       const { data: responseRow } = await supabase
         .from('responses')
         .select('first_name, last_name, student_email, student_id')
@@ -789,7 +854,7 @@ export async function getToken(tokenId: string): Promise<GetTokenResult> {
         }
       }
     } else {
-      // When status is active (e.g. after reload), still show who first redeemed (from responses).
+      // When status is ACTIVE/DORMANT (e.g. after reload), still show who first redeemed (from responses).
       const { data: firstRow } = await supabase
         .from('responses')
         .select('first_name, last_name, student_email, student_id')
@@ -811,13 +876,16 @@ export async function getToken(tokenId: string): Promise<GetTokenResult> {
       id: row.id,
       lat: Number(row.lat) ?? 0,
       lng: Number(row.lng) ?? 0,
-      status: row.status === 'found' ? 'found' as const : 'active' as const,
+      status: normalizeTokenStatus(row.status),
       organization_id: row.organization_id ?? null,
       campaign_id: row.campaign_id ?? null,
       balance: row.balance != null ? Number(row.balance) : undefined,
       created_at: typeof row.created_at === 'string' ? row.created_at : null,
       redeemed_at: typeof row.redeemed_at === 'string' ? row.redeemed_at : null,
       reloaded_at: typeof row.reloaded_at === 'string' ? row.reloaded_at : null,
+      nfc_uid: row.nfc_uid ?? null,
+      asset_uuid: row.asset_uuid ?? null,
+      yield_source_id: row.yield_source_id ?? null,
       campaigns: Array.isArray(row.campaigns) ? row.campaigns[0] ?? null : row.campaigns ?? null,
       organizations: Array.isArray(row.organizations) ? row.organizations[0] ?? null : row.organizations ?? null,
       ...(auth.organizationId === null ? { claim_url: getClaimUrl(row.id) } : { claim_url_restricted: true }),

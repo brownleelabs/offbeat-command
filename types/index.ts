@@ -1,26 +1,75 @@
-/** Strict token type: id, lat, lng, status. */
+/** 6-state token status (Ghost-in-the-Shell model). */
+export type TokenStatus =
+  | "MINTED"             // Digital value from yield (Ghost)
+  | "DORMANT"           // Physical chip deployed but empty (Shell)
+  | "ACTIVE"            // Asset ID assigned to physical ID (Live)
+  | "PENDING_SETTLEMENT" // Student tapped, Venmo processing (Locked)
+  | "REDEEMED"          // Payout complete, asset consumed (Spent)
+  | "VOID";             // Stolen/Lost hardware (Kill Switch)
+
+/** Strict token type: id, lat, lng, status (6-state). */
 export interface Token {
   id: string;
   lat: number;
   lng: number;
-  status: "active" | "found";
+  status: TokenStatus;
   organization_id: string | null;
+  /** Immutable hardware ID from NTAG 424 DNA. */
+  nfc_uid?: string | null;
+  /** Transient financial ID ($25 value); required when status = ACTIVE. */
+  asset_uuid?: string | null;
+  /** Optional reference to BENJI transaction that minted this. */
+  yield_source_id?: string | null;
+  /** Token balance in USD; used by Fleet and claim flows. */
+  balance?: number;
+  created_at?: string | null;
+  redeemed_at?: string | null;
+  reloaded_at?: string | null;
 }
 
-/** Row as returned from Supabase (may use latitude/longitude column names). */
+/** Row as returned from Supabase (may use latitude/longitude column names; status may be string from DB). */
 export type TokenRow = {
   id: string;
-  status: "active" | "found";
+  status: TokenStatus | string;
   organization_id?: string | null;
+  nfc_uid?: string | null;
+  asset_uuid?: string | null;
+  yield_source_id?: string | null;
+  balance?: number | null;
+  created_at?: string | null;
+  redeemed_at?: string | null;
+  reloaded_at?: string | null;
 } & (
   | { lat: number; lng: number }
   | { latitude: number; longitude: number }
 );
 
+/** Normalize status from DB (legacy 'active'|'found' or 6-state). */
+export function normalizeTokenStatus(s: unknown): TokenStatus {
+  if (s === "found" || s === "REDEEMED") return "REDEEMED";
+  if (s === "active") return "ACTIVE";
+  if (s === "DORMANT" || s === "ACTIVE" || s === "MINTED" || s === "PENDING_SETTLEMENT" || s === "VOID")
+    return s as TokenStatus;
+  return "DORMANT";
+}
+
 export function rowToToken(row: TokenRow): Token {
   const lat = "lat" in row ? row.lat : row.latitude;
   const lng = "lng" in row ? row.lng : row.longitude;
-  return { id: row.id, lat, lng, status: row.status, organization_id: row.organization_id ?? null };
+  return {
+    id: row.id,
+    lat,
+    lng,
+    status: normalizeTokenStatus(row.status),
+    organization_id: row.organization_id ?? null,
+    nfc_uid: row.nfc_uid ?? null,
+    asset_uuid: row.asset_uuid ?? null,
+    yield_source_id: row.yield_source_id ?? null,
+    balance: row.balance != null ? Number(row.balance) : undefined,
+    created_at: row.created_at ?? null,
+    redeemed_at: row.redeemed_at ?? null,
+    reloaded_at: row.reloaded_at ?? null,
+  };
 }
 
 /** Required field key for reward payout (stored in campaign.required_fields). */
@@ -89,6 +138,42 @@ export interface TokenWithCampaign extends Token {
   balance?: number;
   /** When the token/asset was created (Fleet table Created column). */
   created_at?: string | null;
+}
+
+/** Map view token row: id, lat, lng, status (6-state), organization_id, campaign_id, redeemed_at, nfc_uid, asset_uuid. */
+export interface MapTokenRow {
+  id: string;
+  lat: number;
+  lng: number;
+  status: TokenStatus;
+  organization_id: string | null;
+  campaign_id: string | null;
+  redeemed_at: string | null;
+  nfc_uid: string | null;
+  asset_uuid: string | null;
+}
+
+/** Token object returned by Fleet getToken (success shape). Used by GetTokenResult. */
+export interface FleetTokenDetail {
+  id: string;
+  lat: number;
+  lng: number;
+  status: TokenStatus;
+  organization_id: string | null;
+  campaign_id: string | null;
+  balance?: number;
+  created_at?: string | null;
+  redeemed_at?: string | null;
+  reloaded_at?: string | null;
+  nfc_uid?: string | null;
+  asset_uuid?: string | null;
+  yield_source_id?: string | null;
+  campaigns?: { name: string } | null;
+  organizations?: { name: string } | null;
+  claim_url?: string;
+  claim_url_restricted?: boolean;
+  redeemer?: { first_name: string; last_name: string; student_email: string; student_id: string } | null;
+  first_redeemer?: { first_name: string; last_name: string; student_email: string; student_id: string } | null;
 }
 
 export type UserRole = "SUPER_ADMIN" | "ORG_ADMIN" | "AUDITOR" | "STUDENT";

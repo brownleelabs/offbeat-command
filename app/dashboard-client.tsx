@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
@@ -38,6 +39,7 @@ import {
   getFleetAuditLog,
   getMapAnalytics,
   getToken,
+  getTokenStateCounts,
   createTokens,
   reloadTokens,
   deleteToken,
@@ -48,6 +50,7 @@ import {
   type ListTokensResult,
   type FleetOrderBy,
   type FleetOrderDir,
+  type TokenStateCounts,
 } from "@/app/fleet/fleet-actions";
 import {
   archiveCampaigns,
@@ -58,8 +61,21 @@ import {
   type ListCampaignsResult,
 } from "@/app/campaigns/campaign-actions";
 import type { Campaign, TokenWithCampaign, DealScenario } from "@/types";
-import type { CampaignQuestion } from "@/types";
-import { CAMPAIGN_REQUIRED_FIELDS } from "@/types";
+import type { CampaignQuestion, TokenStatus } from "@/types";
+import { CAMPAIGN_REQUIRED_FIELDS, normalizeTokenStatus } from "@/types";
+
+/** Display label for Asset ID status (chart state names: Minted, Dormant, Active, etc.). */
+function fleetStatusLabel(status: TokenStatus | string): string {
+  switch (status) {
+    case "MINTED": return "Minted";
+    case "DORMANT": return "Dormant";
+    case "ACTIVE": return "Active";
+    case "PENDING_SETTLEMENT": return "Pending";
+    case "REDEEMED": return "Redeemed";
+    case "VOID": return "Void";
+    default: return String(status);
+  }
+}
 
 /** Campus/tenant entity. In the DB: table `organizations`. Public-facing UI uses "school" (e.g. /schools); Command Center uses "organization". */
 type Organization = { id: string; name: string };
@@ -101,7 +117,7 @@ function normalizeTokensWithCampaign(rows: unknown[]): TokenWithCampaign[] {
       id: String(r.id),
       lat: Number(lat),
       lng: Number(lng),
-      status: (r.status === "found" ? "found" : "active") as "active" | "found",
+      status: normalizeTokenStatus(r.status),
       organization_id: (r.organization_id as string) ?? null,
       campaign_id: (r.campaign_id as string) ?? null,
       campaigns: (r.campaigns as { name: string } | null) ?? null,
@@ -157,12 +173,11 @@ export default function AdminDashboard() {
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetError, setFleetError] = useState("");
   const [fleetCampaignIdFilter, setFleetCampaignIdFilter] = useState<string>("");
-  const [fleetStatusFilter, setFleetStatusFilter] = useState<"all" | "active" | "found">("all");
+  const [fleetStatusFilter, setFleetStatusFilter] = useState<string>("all");
   const [fleetSearchQuery, setFleetSearchQuery] = useState<string>("");
   const [fleetOrderBy, setFleetOrderBy] = useState<FleetOrderBy>("id");
   const [fleetOrderDir, setFleetOrderDir] = useState<FleetOrderDir>("asc");
   const [assignCampaignLoading, setAssignCampaignLoading] = useState(false);
-  const [reloadingTokenId, setReloadingTokenId] = useState<string | null>(null);
   const [exportFleetLoading, setExportFleetLoading] = useState(false);
   const [bulkLoadAmount, setBulkLoadAmount] = useState("25");
   const [bulkLoadSubmitting, setBulkLoadSubmitting] = useState(false);
@@ -171,10 +186,13 @@ export default function AdminDashboard() {
   const [fleetAuditEvents, setFleetAuditEvents] = useState<{ event_type: string; at: string; actor_user_id: string | null; payload?: Record<string, unknown> | null }[]>([]);
   const [fleetAuditOpen, setFleetAuditOpen] = useState(false);
   const [fleetTokenCountByCampaignId, setFleetTokenCountByCampaignId] = useState<Record<string, number>>({});
+  const [fleetTokenCountVersion, setFleetTokenCountVersion] = useState(0);
+  const [tokenStateCounts, setTokenStateCounts] = useState<TokenStateCounts | null>(null);
   const [fleetDetailTokenId, setFleetDetailTokenId] = useState<string | null>(null);
+  const [fleetDetailCopiedField, setFleetDetailCopiedField] = useState<"id" | "url" | null>(null);
   const [mapCampaignId, setMapCampaignId] = useState<string | null>(null);
   const [fleetDetailToken, setFleetDetailToken] = useState<{
-    id: string; lat: number; lng: number; status: "active" | "found";
+    id: string; lat: number; lng: number; status: string;
     organization_id: string | null; campaign_id: string | null; balance?: number;
     created_at?: string | null; redeemed_at?: string | null; reloaded_at?: string | null;
     campaigns?: { name: string } | null; organizations?: { name: string } | null;
@@ -189,6 +207,15 @@ export default function AdminDashboard() {
   const [fleetDetailDeleteConfirm, setFleetDetailDeleteConfirm] = useState(false);
   const [fleetDetailDeleting, setFleetDetailDeleting] = useState(false);
   const fleetDetailModalRef = useRef<HTMLDivElement>(null);
+  // Realtime: refs for debounced Fleet list + counts refresh (avoid stale closures)
+  const fleetLiveRef = useRef<{
+    activeTab: string;
+    fleetPage: number;
+    dataScopeOrgId: string | null;
+    loadFleetList: (overridePage?: number) => void;
+    setTokenStateCounts: (c: TokenStateCounts | null) => void;
+  }>({ activeTab: "map", fleetPage: 1, dataScopeOrgId: null, loadFleetList: () => {}, setTokenStateCounts: () => {} });
+  const fleetLiveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const supabase = createClient();
   const effectivePermissions = getEffectivePermissions(userRole, rolePermissions);
@@ -329,7 +356,7 @@ export default function AdminDashboard() {
           pageSize: fleetPageSize,
           organizationId: dataScopeOrgId ?? undefined,
           campaignId: fleetCampaignIdFilter && fleetCampaignIdFilter.trim() ? fleetCampaignIdFilter.trim() : undefined,
-          status: fleetStatusFilter === "all" ? undefined : fleetStatusFilter,
+          status: fleetStatusFilter === "all" ? undefined : (fleetStatusFilter as import("@/types").TokenStatus),
           searchQuery: fleetSearchQuery?.trim() || undefined,
         });
         if (!res.success) {
@@ -376,6 +403,17 @@ export default function AdminDashboard() {
     }
   }, [activeTab, userRole, fleetPage, fleetPageSize, fleetCampaignIdFilter, fleetStatusFilter, fleetOrderBy, fleetOrderDir, loadFleetList]);
 
+  // Keep fleet live ref updated so realtime handler can debounce-refresh Fleet list + counts when Fleet tab is active
+  useEffect(() => {
+    fleetLiveRef.current = {
+      activeTab,
+      fleetPage: fleetPage ?? 1,
+      dataScopeOrgId,
+      loadFleetList,
+      setTokenStateCounts,
+    };
+  }, [activeTab, fleetPage, dataScopeOrgId, loadFleetList, setTokenStateCounts]);
+
   const fleetCampaignIdsKey = campaigns
     .filter((c) => !c.deleted_at)
     .map((c) => c.id)
@@ -399,7 +437,21 @@ export default function AdminDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, userRole, dataScopeOrgId, fleetCampaignIdsKey]);
+  }, [activeTab, userRole, dataScopeOrgId, fleetCampaignIdsKey, fleetTokenCountVersion]);
+
+  useEffect(() => {
+    if (activeTab !== "fleet" || !isAdminRole(userRole)) {
+      if (activeTab !== "fleet") setTokenStateCounts(null);
+      return;
+    }
+    let cancelled = false;
+    getTokenStateCounts(dataScopeOrgId ?? undefined).then((res) => {
+      if (!cancelled && res.success) setTokenStateCounts(res.counts);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, userRole, dataScopeOrgId, fleetTokenCountVersion]);
 
   // ORG_ADMIN: keep targetSchoolId in sync with their org so "Assign to my organization" works
   useEffect(() => {
@@ -443,6 +495,19 @@ export default function AdminDashboard() {
   // Realtime: keep Fleet, Stats, and Map in sync when tokens or responses change (no refresh needed)
   useEffect(() => {
     if (!isAdminRole(userRole)) return;
+    const FLEET_LIVE_DEBOUNCE_MS = 400;
+    const scheduleFleetLiveRefresh = () => {
+      if (fleetLiveDebounceRef.current) clearTimeout(fleetLiveDebounceRef.current);
+      fleetLiveDebounceRef.current = setTimeout(() => {
+        fleetLiveDebounceRef.current = null;
+        const r = fleetLiveRef.current;
+        if (r.activeTab !== "fleet") return;
+        r.loadFleetList(r.fleetPage);
+        getTokenStateCounts(r.dataScopeOrgId ?? undefined).then((res) => {
+          if (res.success) r.setTokenStateCounts(res.counts);
+        });
+      }, FLEET_LIVE_DEBOUNCE_MS);
+    };
     const channel = supabase
       .channel("dashboard-live")
       .on(
@@ -457,6 +522,7 @@ export default function AdminDashboard() {
           const row = payload.new;
           const incomingOrgId = row.organization_id as string | null | undefined;
           if (dataScopeOrgId != null && incomingOrgId !== dataScopeOrgId) return;
+          scheduleFleetLiveRefresh();
           setTokens((prev) => {
             const next = normalizeTokensWithCampaign([row]);
             const token = next[0];
@@ -534,12 +600,30 @@ export default function AdminDashboard() {
           const row = payload.new;
           const incomingOrgId = row.organization_id as string | null | undefined;
           if (dataScopeOrgId != null && incomingOrgId !== dataScopeOrgId) return;
+          scheduleFleetLiveRefresh();
           setTokens((prev) => {
             const next = normalizeTokensWithCampaign([row]);
             const token = next[0];
             if (!token || prev.some((t) => t.id === token.id)) return prev;
             return [...prev, token];
           });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "tokens",
+          ...(dataScopeOrgId != null ? { filter: `organization_id=eq.${dataScopeOrgId}` } : {}),
+        },
+        (payload: { old: Record<string, unknown> }) => {
+          const id = payload.old?.id;
+          if (dataScopeOrgId != null && payload.old?.organization_id !== dataScopeOrgId) return;
+          if (typeof id === "string") {
+            setTokens((prev) => prev.filter((t) => t.id !== id));
+          }
+          scheduleFleetLiveRefresh();
         }
       )
       .on(
@@ -559,6 +643,8 @@ export default function AdminDashboard() {
       .subscribe();
 
     return () => {
+      if (fleetLiveDebounceRef.current) clearTimeout(fleetLiveDebounceRef.current);
+      fleetLiveDebounceRef.current = null;
       supabase.removeChannel(channel);
     };
   }, [userRole, dataScopeOrgId, supabase]);
@@ -596,6 +682,7 @@ export default function AdminDashboard() {
         setTargetCampaignId("");
         loadData();
         loadFleetList(fleetPage);
+        setFleetTokenCountVersion((v) => v + 1);
         setAssignCampaignMessage({ type: "success", text: `${result.count} token(s) campaign updated.` });
         setTimeout(() => setAssignCampaignMessage(null), 3000);
       } else {
@@ -616,23 +703,10 @@ export default function AdminDashboard() {
       setSelectedTokenIds(new Set());
       loadData();
       loadFleetList(fleetPage);
+      setFleetTokenCountVersion((v) => v + 1);
     } else {
       setAssignToSchoolMessage({ type: "error", text: result.error ?? "Failed to assign." });
-    }
-  }
-
-  async function handleReloadToken(tokenId: string) {
-    setReloadingTokenId(tokenId);
-    setFleetError("");
-    try {
-      const result = await reloadTokens([tokenId]);
-      if (result.success) {
-        loadFleetList(fleetPage);
-      } else {
-        setFleetError(result.error ?? "Reload failed.");
-      }
-    } finally {
-      setReloadingTokenId(null);
+      setTimeout(() => setAssignToSchoolMessage(null), 7000);
     }
   }
 
@@ -917,6 +991,7 @@ export default function AdminDashboard() {
         {activeTab === "fleet" && (
           <FleetTab
             tokens={normalizeTokensWithCampaign(fleetRows)}
+            tokenStateCounts={tokenStateCounts}
             campaigns={campaigns.filter((c) => !c.deleted_at)}
             selectedTokenIds={selectedTokenIds}
             setSelectedTokenIds={setSelectedTokenIds}
@@ -988,8 +1063,6 @@ export default function AdminDashboard() {
               const res = await getFleetAuditLog(20);
               if (res.success) setFleetAuditEvents(res.events);
             }}
-            onReloadToken={handleReloadToken}
-            reloadingTokenId={reloadingTokenId}
             onDeleteToken={handleDeleteToken}
             onFundToken={handleFundToken}
             onBulkLoadFunds={handleBulkLoadFunds}
@@ -1063,16 +1136,31 @@ export default function AdminDashboard() {
                       <span className="text-muted-foreground">Asset ID</span>
                       <span className="flex items-center gap-2">
                         <span className="font-mono text-xs break-all">{fleetDetailToken.id}</span>
-                        <button type="button" onClick={() => copyToClipboard(fleetDetailToken.id)} className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground" title="Copy ID">Copy</button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            copyToClipboard(fleetDetailToken.id);
+                            setFleetDetailCopiedField("id");
+                            window.setTimeout(() => setFleetDetailCopiedField(null), 1500);
+                          }}
+                          className={`shrink-0 rounded border px-2 py-0.5 text-xs transition-colors ${
+                            fleetDetailCopiedField === "id"
+                              ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                              : "border-white/10 text-muted-foreground hover:bg-white/5 hover:text-foreground"
+                          }`}
+                          title="Copy ID"
+                        >
+                          {fleetDetailCopiedField === "id" ? "Copied!" : "Copy"}
+                        </button>
                       </span>
                     </div>
                     <div className="flex justify-between gap-4">
                       <span className="text-muted-foreground">Status</span>
-                      <span className={fleetDetailToken.status === "active" ? "rounded px-2 py-0.5 font-mono text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-400" : "rounded px-2 py-0.5 font-mono text-[10px] font-bold uppercase bg-white/5 text-muted-foreground"}>
-                        {fleetDetailToken.status === "active" ? "Active (value sitting)" : "Redeemed"}
+                      <span className={fleetDetailToken.status === "ACTIVE" ? "rounded px-2 py-0.5 font-mono text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-400" : "rounded px-2 py-0.5 font-mono text-[10px] font-bold uppercase bg-white/5 text-muted-foreground"}>
+                        {fleetStatusLabel(fleetDetailToken.status)}
                       </span>
                     </div>
-                    {fleetDetailToken.status === "active" && fleetDetailToken.created_at && (
+                    {fleetDetailToken.status === "ACTIVE" && fleetDetailToken.created_at && (
                       <div className="flex justify-between gap-4">
                         <span className="text-muted-foreground">Value sitting since</span>
                         <span className="text-xs">{new Date(fleetDetailToken.created_at).toLocaleString()}</span>
@@ -1124,7 +1212,7 @@ export default function AdminDashboard() {
                         <span className="text-xs">{new Date(fleetDetailToken.reloaded_at).toLocaleString()}</span>
                       </div>
                     )}
-                    {fleetDetailToken.status === "active" && fleetDetailToken.first_redeemer && (fleetDetailToken.first_redeemer.first_name || fleetDetailToken.first_redeemer.last_name || fleetDetailToken.first_redeemer.student_email || fleetDetailToken.first_redeemer.student_id) && (
+                    {fleetDetailToken.status === "ACTIVE" && fleetDetailToken.first_redeemer && (fleetDetailToken.first_redeemer.first_name || fleetDetailToken.first_redeemer.last_name || fleetDetailToken.first_redeemer.student_email || fleetDetailToken.first_redeemer.student_id) && (
                       <>
                         <div className="flex justify-between gap-4">
                           <span className="text-muted-foreground">First redeemed by (name)</span>
@@ -1144,7 +1232,22 @@ export default function AdminDashboard() {
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <span className="text-muted-foreground">Claim URL</span>
                         <span className="font-mono text-xs break-all text-muted-foreground">{fleetDetailToken.claim_url}</span>
-                        <button type="button" onClick={() => copyToClipboard(fleetDetailToken.claim_url!)} className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground" title="Copy URL">Copy</button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            copyToClipboard(fleetDetailToken.claim_url!);
+                            setFleetDetailCopiedField("url");
+                            window.setTimeout(() => setFleetDetailCopiedField(null), 1500);
+                          }}
+                          className={`shrink-0 rounded border px-2 py-0.5 text-xs transition-colors ${
+                            fleetDetailCopiedField === "url"
+                              ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                              : "border-white/10 text-muted-foreground hover:bg-white/5 hover:text-foreground"
+                          }`}
+                          title="Copy URL"
+                        >
+                          {fleetDetailCopiedField === "url" ? "Copied!" : "Copy"}
+                        </button>
                       </div>
                     ) : fleetDetailToken.claim_url_restricted ? (
                       <div className="flex justify-between gap-4">
@@ -1171,7 +1274,7 @@ export default function AdminDashboard() {
                             onClick={async () => {
                               const amt = Number(fleetDetailFundAmount);
                               if (!Number.isFinite(amt) || amt < 1 || amt > 25 || !fleetDetailTokenId) return;
-                              if (fleetDetailToken.status === "found") {
+                              if (fleetDetailToken.status === "REDEEMED") {
                                 const confirmed = window.confirm(
                                   "This token has already been redeemed. Adding funds will not change who redeemed it. Add funds anyway?"
                                 );
@@ -1472,11 +1575,11 @@ function ExecutiveStats({
       ? fleetScopeTotal
       : tokens.length;
   const foundCount =
-    fleetScopeFound != null ? fleetScopeFound : tokens.filter((t) => t.status === "found").length;
+    fleetScopeFound != null ? fleetScopeFound : tokens.filter((t) => t.status === "REDEEMED").length;
   const activeCount =
     fleetScopeTotal != null && fleetScopeFound != null
       ? fleetScopeTotal - fleetScopeFound
-      : tokens.filter((t) => t.status === "active").length;
+      : tokens.filter((t) => t.status === "ACTIVE").length;
   const totalYieldDisbursed = foundCount * 25;
   const campusLiquidity = activeCount * MOCK_USD_PER_ACTIVE_TOKEN;
   const yieldEarned = Math.round(campusLiquidity * TENANT_APY);
@@ -1647,6 +1750,7 @@ function FleetTab({
   fleetCampaignIdFilter,
   setFleetCampaignIdFilter,
   fleetTokenCountByCampaignId,
+  tokenStateCounts,
   fleetStatusFilter,
   setFleetStatusFilter,
   fleetSearchQuery,
@@ -1662,8 +1766,6 @@ function FleetTab({
   fleetAuditOpen,
   setFleetAuditOpen,
   onLoadFleetAudit,
-  onReloadToken,
-  reloadingTokenId,
   onDeleteToken: _onDeleteToken,
   onFundToken: _onFundToken,
   onBulkLoadFunds,
@@ -1676,6 +1778,7 @@ function FleetTab({
   setFleetDetailTokenId,
 }: {
   tokens: TokenWithCampaign[];
+  tokenStateCounts?: TokenStateCounts | null;
   campaigns: Campaign[];
   selectedTokenIds: Set<string>;
   setSelectedTokenIds: (s: Set<string>) => void;
@@ -1705,8 +1808,8 @@ function FleetTab({
   fleetCampaignIdFilter?: string;
   setFleetCampaignIdFilter?: (v: string) => void;
   fleetTokenCountByCampaignId?: Record<string, number>;
-  fleetStatusFilter?: "all" | "active" | "found";
-  setFleetStatusFilter?: (v: "all" | "active" | "found") => void;
+  fleetStatusFilter?: string;
+  setFleetStatusFilter?: (v: string) => void;
   fleetSearchQuery?: string;
   setFleetSearchQuery?: (v: string) => void;
   fleetOrderBy?: FleetOrderBy;
@@ -1720,8 +1823,6 @@ function FleetTab({
   fleetAuditOpen?: boolean;
   setFleetAuditOpen?: (v: boolean) => void;
   onLoadFleetAudit?: () => void;
-  onReloadToken?: (tokenId: string) => void;
-  reloadingTokenId?: string | null;
   onDeleteToken?: (tokenId: string) => Promise<boolean>;
   onFundToken?: (tokenId: string, amount: number) => Promise<boolean>;
   onBulkLoadFunds?: (amount: number) => Promise<boolean>;
@@ -1734,6 +1835,10 @@ function FleetTab({
   setFleetDetailTokenId: (id: string | null) => void;
 }) {
   const [showFleetTermsTooltip, setShowFleetTermsTooltip] = useState(false);
+  const [showAssetStatusTooltip, setShowAssetStatusTooltip] = useState(false);
+  const assetStatusTooltipAnchorRef = useRef<HTMLButtonElement>(null);
+  const [assetStatusTooltipRect, setAssetStatusTooltipRect] = useState<{ top: number; left: number } | null>(null);
+  const assetStatusTooltipCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fleetConfirmDialog, setFleetConfirmDialog] = useState<
     { type: "transfer"; message: string } | { type: "bulkFundRedeemed"; message: string; amount: number } | null
   >(null);
@@ -1801,6 +1906,93 @@ function FleetTab({
             )}
           </span>
         </div>
+        {tokenStateCounts != null && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded border border-accent/50 bg-background/30 px-3 py-2 text-sm">
+            <span className="mr-1 font-medium text-primary">Asset ID Status Count:</span>
+            <span className="relative inline-flex">
+              <button
+                ref={assetStatusTooltipAnchorRef}
+                type="button"
+                aria-label="What each status means"
+                title="What each status means"
+                className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-accent/60 bg-background text-muted-foreground hover:bg-background/80 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 cursor-help text-xs font-bold"
+                onMouseEnter={() => {
+                  if (assetStatusTooltipCloseTimerRef.current) {
+                    clearTimeout(assetStatusTooltipCloseTimerRef.current);
+                    assetStatusTooltipCloseTimerRef.current = null;
+                  }
+                  const r = assetStatusTooltipAnchorRef.current?.getBoundingClientRect();
+                  if (r) setAssetStatusTooltipRect({ top: r.bottom + 4, left: r.left });
+                  setShowAssetStatusTooltip(true);
+                }}
+                onMouseLeave={() => {
+                  assetStatusTooltipCloseTimerRef.current = setTimeout(() => setShowAssetStatusTooltip(false), 150);
+                }}
+                onFocus={() => {
+                  const r = assetStatusTooltipAnchorRef.current?.getBoundingClientRect();
+                  if (r) setAssetStatusTooltipRect({ top: r.bottom + 4, left: r.left });
+                  setShowAssetStatusTooltip(true);
+                }}
+                onBlur={() => setShowAssetStatusTooltip(false)}
+              >
+                ?
+              </button>
+              {showAssetStatusTooltip && assetStatusTooltipRect != null && typeof document !== "undefined" &&
+                createPortal(
+                  <span
+                    role="tooltip"
+                    className="fixed z-[9999] mt-1 w-72 max-w-[90vw] rounded-lg border border-accent bg-muted p-3 text-left text-xs text-foreground shadow-lg"
+                    style={{ top: assetStatusTooltipRect.top, left: assetStatusTooltipRect.left }}
+                    onMouseEnter={() => {
+                      if (assetStatusTooltipCloseTimerRef.current) {
+                        clearTimeout(assetStatusTooltipCloseTimerRef.current);
+                        assetStatusTooltipCloseTimerRef.current = null;
+                      }
+                      setShowAssetStatusTooltip(true);
+                    }}
+                    onMouseLeave={() => setShowAssetStatusTooltip(false)}
+                  >
+                    <span className="mb-1.5 block font-semibold text-muted-foreground">Status meanings</span>
+                    <dl className="space-y-1.5 text-[11px] leading-relaxed">
+                      <div><dt className="font-medium">Minted</dt><dd className="text-muted-foreground">Digital value created; not yet tethered to a chip.</dd></div>
+                      <div><dt className="font-medium">Dormant</dt><dd className="text-muted-foreground">Physical chip deployed; empty ($0).</dd></div>
+                      <div><dt className="font-medium">Active</dt><dd className="text-muted-foreground">Tethered: chip has $25 value.</dd></div>
+                      <div><dt className="font-medium">Pending</dt><dd className="text-muted-foreground">Student tapped; Venmo payout in progress.</dd></div>
+                      <div><dt className="font-medium">Redeemed</dt><dd className="text-muted-foreground">Payout complete; asset burned.</dd></div>
+                    </dl>
+                  </span>,
+                  document.body
+                )
+              }
+            </span>
+            {[
+              { status: "MINTED" as const, label: "Minted", count: tokenStateCounts.minted, title: "Digital value created; not yet tethered to a chip" },
+              { status: "DORMANT" as const, label: "Dormant", count: tokenStateCounts.dormant, title: "Physical chip deployed; empty ($0)" },
+              { status: "ACTIVE" as const, label: "Active", count: tokenStateCounts.active, title: "Tethered: chip has $25 value" },
+              { status: "PENDING_SETTLEMENT" as const, label: "Pending", count: tokenStateCounts.pending_settlement, title: "Student tapped; Venmo payout in progress" },
+              { status: "REDEEMED" as const, label: "Redeemed", count: tokenStateCounts.redeemed, title: "Payout complete; asset burned" },
+            ].map(({ status, label, count, title }) => {
+              const isSelected = fleetStatusFilter === status;
+              return (
+                <button
+                  key={status}
+                  type="button"
+                  title={title}
+                  onClick={() => setFleetStatusFilter?.(isSelected ? "all" : status)}
+                  className={`rounded px-2 py-1 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50 ${
+                    isSelected
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                  aria-pressed={isSelected}
+                  aria-label={`Filter by ${label} (${count})`}
+                >
+                  {label}: <span className="font-mono tabular-nums">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-4">
           {showFleetWrite && setFleetCampaignIdFilter && setFleetStatusFilter && (
             <div className="flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2">
@@ -1824,12 +2016,15 @@ function FleetTab({
               <select
                 aria-label="Filter by status"
                 value={fleetStatusFilter ?? "all"}
-                onChange={(e) => setFleetStatusFilter(e.target.value as "all" | "active" | "found")}
-                className="h-9 w-28 rounded border border-accent bg-background/50 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+                onChange={(e) => setFleetStatusFilter(e.target.value)}
+                className="h-9 w-36 rounded border border-accent bg-background/50 text-sm outline-none focus:ring-2 focus:ring-primary/20"
               >
                 <option value="all">All</option>
-                <option value="active">Active</option>
-                <option value="found">Found</option>
+                <option value="MINTED">Minted</option>
+                <option value="DORMANT">Dormant</option>
+                <option value="ACTIVE">Active</option>
+                <option value="PENDING_SETTLEMENT">Pending</option>
+                <option value="REDEEMED">Redeemed</option>
               </select>
               <label htmlFor="fleet-search-uuid" className="sr-only">Search by asset ID</label>
               <input
@@ -1853,7 +2048,7 @@ function FleetTab({
             </div>
           )}
           {showFleetWrite && (
-            <div className="flex items-center gap-2 rounded border border-accent bg-background/40 px-3 py-2">
+            <div className="flex items-center gap-2 rounded border border-white/80 bg-background/40 px-3 py-2">
               <select
                 id="fleet-target-campaign"
                 name="fleetTargetCampaign"
@@ -1884,7 +2079,7 @@ function FleetTab({
             </div>
           )}
           {canAssignToSchool && (
-            <div className="flex items-center gap-2 rounded border border-amber-500/20 bg-background/40 px-3 py-2">
+            <div className="flex items-center gap-2 rounded border border-white/80 bg-background/40 px-3 py-2">
               {effectiveSuperAdmin && (
                 <>
                   <select
@@ -1919,7 +2114,7 @@ function FleetTab({
                   });
                 }}
                 disabled={!targetSchoolId || selectedTokenIds.size === 0}
-                className="h-9 rounded border border-amber-500/50 px-4 text-sm font-medium text-amber-500 hover:bg-amber-500/10 disabled:opacity-50"
+                className="h-9 rounded bg-primary px-4 text-sm font-medium tracking-wide text-primary-foreground disabled:opacity-50"
               >
                 Transfer Fleet
               </button>
@@ -1964,7 +2159,7 @@ function FleetTab({
                 onClick={() => {
                   const amt = Number(bulkLoadAmount);
                   if (!Number.isFinite(amt) || amt < 1 || amt > 25) return;
-                  const redeemedCount = tokens.filter((t) => selectedTokenIds.has(t.id) && t.status === "found").length;
+                  const redeemedCount = tokens.filter((t) => selectedTokenIds.has(t.id) && t.status === "REDEEMED").length;
                   if (redeemedCount > 0) {
                     setFleetConfirmDialog({
                       type: "bulkFundRedeemed",
@@ -2164,11 +2359,11 @@ function FleetTab({
                   </td>
                   <td className="p-4 text-right">
                     <span className={`rounded px-2 py-1 font-mono text-[10px] font-bold uppercase ${
-                      t.status === "active"
+                      t.status === "ACTIVE"
                         ? "bg-emerald-500/20 text-emerald-400"
                         : "bg-white/5 text-muted-foreground"
                     }`}>
-                      {t.status === "active" ? "Active (waiting)" : "Redeemed"}
+                      {fleetStatusLabel(t.status)}
                     </span>
                   </td>
                   <td className="p-4 text-right text-xs text-muted-foreground">
@@ -2177,17 +2372,6 @@ function FleetTab({
                   {showFleetWrite && (
                     <td className="p-4 text-right">
                       <div className="flex justify-end gap-2">
-                        {effectiveSuperAdmin && t.status === "found" && (
-                          <button
-                            type="button"
-                            onClick={() => onReloadToken?.(t.id)}
-                            disabled={reloadingTokenId === t.id}
-                            className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs text-amber-400 hover:bg-amber-500/20 disabled:opacity-50"
-                            title="Reset status to active (does not set balance; use Load funds to add value)"
-                          >
-                            {reloadingTokenId === t.id ? "Reloading…" : "Reload"}
-                          </button>
-                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -3201,6 +3385,7 @@ function SettingsTab({
   const [createEmail, setCreateEmail] = useState("");
   const [createPhone, setCreatePhone] = useState("");
   const [createPassword, setCreatePassword] = useState("");
+  const [createPasswordVisible, setCreatePasswordVisible] = useState(false);
   const [createRole, setCreateRole] = useState<string>("STUDENT");
   const [createOrgId, setCreateOrgId] = useState("");
   const [createSubmitting, setCreateSubmitting] = useState(false);
@@ -3216,6 +3401,7 @@ function SettingsTab({
   const [editMessage, setEditMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [resettingUser, setResettingUser] = useState<ListUserRow | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordVisible, setResetPasswordVisible] = useState(false);
   const [resetSubmitting, setResetSubmitting] = useState(false);
   const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [createTokensCount, setCreateTokensCount] = useState(1);
@@ -3225,6 +3411,9 @@ function SettingsTab({
   const [removeFundsTokenId, setRemoveFundsTokenId] = useState("");
   const [removeFundsSubmitting, setRemoveFundsSubmitting] = useState(false);
   const [removeFundsMessage, setRemoveFundsMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [reloadTokenId, setReloadTokenId] = useState("");
+  const [reloadSubmitting, setReloadSubmitting] = useState(false);
+  const [reloadMessage, setReloadMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [redemptionNote, setRedemptionNote] = useState("");
   const [redemptionLink, setRedemptionLink] = useState("");
   const [redemptionLoading, setRedemptionLoading] = useState(true);
@@ -3344,6 +3533,25 @@ function SettingsTab({
     }
   };
 
+  const handleReloadToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = reloadTokenId.trim();
+    if (!id) {
+      setReloadMessage({ type: "error", text: "Enter an asset ID (token UUID)." });
+      return;
+    }
+    setReloadSubmitting(true);
+    setReloadMessage(null);
+    const result = await reloadTokens([id]);
+    setReloadSubmitting(false);
+    if (result.success) {
+      setReloadMessage({ type: "success", text: `Reloaded ${result.count} token(s). Token is now DORMANT; load funds and assign campaign in Fleet.` });
+      setReloadTokenId("");
+    } else {
+      setReloadMessage({ type: "error", text: result.error ?? "Reload failed." });
+    }
+  };
+
   const handleSaveRedemption = async (e: React.FormEvent) => {
     e.preventDefault();
     setRedemptionSaving(true);
@@ -3447,60 +3655,6 @@ function SettingsTab({
 
   return (
     <div className="mx-auto max-w-[98vw] px-4 py-8">
-      {/* Redemption success message — shown below Venmo line on claim success */}
-      <div className="mb-12 rounded-xl border border-accent bg-muted p-6">
-        <h2 className="mb-2 text-xl font-bold">Redemption success message</h2>
-        <p className="mb-4 text-sm text-muted-foreground">
-          Optional note and link shown on the claim success page below &quot;Payout will be sent to your Venmo.&quot; (max 200 characters for note.)
-        </p>
-        {redemptionLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : (
-          <form onSubmit={handleSaveRedemption} className="space-y-4">
-            <div>
-              <label htmlFor="redemption-note" className="mb-1 block text-xs font-medium text-muted-foreground">
-                Message (optional)
-              </label>
-              <textarea
-                id="redemption-note"
-                maxLength={200}
-                rows={3}
-                value={redemptionNote}
-                onChange={(e) => setRedemptionNote(e.target.value.slice(0, 200))}
-                className="w-full max-w-md rounded border border-accent bg-background px-3 py-2 text-sm"
-                placeholder="e.g. Check your email for next steps."
-              />
-              <p className="mt-1 text-xs text-muted-foreground">{redemptionNote.length}/200</p>
-            </div>
-            <div>
-              <label htmlFor="redemption-link" className="mb-1 block text-xs font-medium text-muted-foreground">
-                Website link (optional)
-              </label>
-              <input
-                id="redemption-link"
-                type="url"
-                value={redemptionLink}
-                onChange={(e) => setRedemptionLink(e.target.value)}
-                className="w-full max-w-md rounded border border-accent bg-background px-3 py-2 text-sm"
-                placeholder="https://..."
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={redemptionSaving}
-              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
-              {redemptionSaving ? "Saving…" : "Save"}
-            </button>
-            {redemptionMessage && (
-              <p className={redemptionMessage.type === "success" ? "text-sm text-success" : "text-sm text-destructive"}>
-                {redemptionMessage.text}
-              </p>
-            )}
-          </form>
-        )}
-      </div>
-
       {/* Token creation and remove funds — Settings (SuperAdmin) */}
       <div className="mb-12 rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-6">
         <div>
@@ -3592,6 +3746,91 @@ function SettingsTab({
             </p>
           )}
         </div>
+
+        <div className="mt-6 border-t border-emerald-500/20 pt-6">
+          <h3 className="mb-2 text-sm font-bold text-emerald-400">Reload token (edge case)</h3>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Enter the asset ID (token UUID) of a <strong>redeemed</strong> token to set it back to DORMANT so it can be given a new asset and loaded again. Only for superadmin edge cases; most tokens stay redeemed.
+          </p>
+          <form onSubmit={handleReloadToken} className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium">Asset ID (UUID)</span>
+              <input
+                type="text"
+                value={reloadTokenId}
+                onChange={(e) => { setReloadTokenId(e.target.value); setReloadMessage(null); }}
+                placeholder="e.g. 189f08a3-9dfb-43d6-bfbb-7a69fdb514b3"
+                className="w-80 max-w-full rounded border border-accent bg-background px-3 py-2 text-sm font-mono"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={reloadSubmitting}
+              className="rounded border border-emerald-500/50 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+            >
+              {reloadSubmitting ? "Reloading…" : "Reload token"}
+            </button>
+          </form>
+          {reloadMessage && (
+            <p className={`mt-2 text-sm ${reloadMessage.type === "success" ? "text-success" : "text-destructive"}`}>
+              {reloadMessage.text}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Redemption success message — shown below Venmo line on claim success */}
+      <div className="mb-12 rounded-xl border border-accent bg-muted p-6">
+        <h2 className="mb-2 text-xl font-bold">Redemption success message</h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Optional note and link shown on the claim success page below &quot;Payout will be sent to your Venmo.&quot; (max 200 characters for note.)
+        </p>
+        {redemptionLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <form onSubmit={handleSaveRedemption} className="space-y-4">
+            <div>
+              <label htmlFor="redemption-note" className="mb-1 block text-xs font-medium text-muted-foreground">
+                Message (optional)
+              </label>
+              <textarea
+                id="redemption-note"
+                maxLength={200}
+                rows={3}
+                value={redemptionNote}
+                onChange={(e) => setRedemptionNote(e.target.value.slice(0, 200))}
+                className="w-full max-w-md rounded border border-accent bg-background px-3 py-2 text-sm"
+                placeholder="e.g. Check your email for next steps."
+              />
+              <p className="mt-1 text-xs text-muted-foreground">{redemptionNote.length}/200</p>
+            </div>
+            <div>
+              <label htmlFor="redemption-link" className="mb-1 block text-xs font-medium text-muted-foreground">
+                Website link (optional)
+              </label>
+              <input
+                id="redemption-link"
+                type="url"
+                value={redemptionLink}
+                onChange={(e) => setRedemptionLink(e.target.value)}
+                className="w-full max-w-md rounded border border-accent bg-background px-3 py-2 text-sm"
+                placeholder="https://..."
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={redemptionSaving}
+              className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {redemptionSaving ? "Saving…" : "Save"}
+            </button>
+            {redemptionMessage && (
+              <p className={redemptionMessage.type === "success" ? "text-sm text-success" : "text-sm text-destructive"}>
+                {redemptionMessage.text}
+              </p>
+            )}
+          </form>
+        )}
       </div>
 
       <h2 className="mb-2 text-2xl font-bold">Create user</h2>
@@ -3643,15 +3882,25 @@ function SettingsTab({
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium">Password</span>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={createPassword}
-              onChange={(e) => setCreatePassword(e.target.value)}
-              className="rounded border border-accent bg-background px-3 py-2 text-sm"
-              placeholder="Min 6 characters"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type={createPasswordVisible ? "text" : "password"}
+                required
+                minLength={6}
+                value={createPassword}
+                onChange={(e) => setCreatePassword(e.target.value)}
+                className="rounded border border-accent bg-background px-3 py-2 text-sm"
+                placeholder="Min 6 characters"
+              />
+              <button
+                type="button"
+                onClick={() => setCreatePasswordVisible((v) => !v)}
+                className="shrink-0 rounded border border-accent px-2 py-2 text-xs text-muted-foreground hover:bg-muted"
+                title={createPasswordVisible ? "Hide password" : "Show password"}
+              >
+                {createPasswordVisible ? "Hide" : "Show"}
+              </button>
+            </div>
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium">Role</span>
@@ -3788,15 +4037,25 @@ function SettingsTab({
           <div className="flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium">New password</span>
-              <input
-                type="password"
-                required
-                minLength={6}
-                value={resetPassword}
-                onChange={(e) => setResetPassword(e.target.value)}
-                className="rounded border border-accent bg-background px-3 py-2 text-sm"
-                placeholder="Min 6 characters"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type={resetPasswordVisible ? "text" : "password"}
+                  required
+                  minLength={6}
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  className="rounded border border-accent bg-background px-3 py-2 text-sm"
+                  placeholder="Min 6 characters"
+                />
+                <button
+                  type="button"
+                  onClick={() => setResetPasswordVisible((v) => !v)}
+                  className="shrink-0 rounded border border-accent px-2 py-2 text-xs text-muted-foreground hover:bg-muted"
+                  title={resetPasswordVisible ? "Hide password" : "Show password"}
+                >
+                  {resetPasswordVisible ? "Hide" : "Show"}
+                </button>
+              </div>
             </label>
             <button type="submit" disabled={resetSubmitting} className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50">
               {resetSubmitting ? "Resetting…" : "Reset password"}

@@ -8,7 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Supercluster from "supercluster";
 import { createClient } from "@/lib/supabase";
 import { useDashboard } from "@/components/dashboard-context";
-import { listTokensForMap, getMapAnalytics, type MapTokenRow } from "@/app/fleet/fleet-actions";
+import { listTokensForMap, getMapAnalytics } from "@/app/fleet/fleet-actions";
+import { normalizeTokenStatus, type MapTokenRow } from "@/types";
 
 const INITIAL_VIEW_STATE = {
   longitude: -97.7341,
@@ -247,7 +248,7 @@ export default function MapView({
           if (orgId != null && newItem.organization_id !== orgId) return;
           const lat = Number(newItem.lat);
           const lng = Number(newItem.lng);
-          const status = newItem.status === "found" ? "found" : "active";
+          const status = normalizeTokenStatus((newItem as { status?: string }).status);
           const token: MapTokenRow = {
             id: newItem.id,
             lat: Number.isFinite(lat) ? lat : 0,
@@ -256,11 +257,13 @@ export default function MapView({
             organization_id: newItem.organization_id ?? null,
             campaign_id: newItem.campaign_id ?? null,
             redeemed_at: typeof newItem.redeemed_at === "string" ? newItem.redeemed_at : null,
+            nfc_uid: (newItem as { nfc_uid?: string | null }).nfc_uid ?? null,
+            asset_uuid: (newItem as { asset_uuid?: string | null }).asset_uuid ?? null,
           };
           setTokens((prev) =>
             prev.map((t) => (t.id === token.id ? token : t))
           );
-          if (token.status === "found") {
+          if (token.status === "REDEEMED") {
             setJustFoundIds((prev) => new Set(prev).add(token.id));
             setTimeout(() => {
               setJustFoundIds((prev) => {
@@ -283,7 +286,7 @@ export default function MapView({
           if (orgId != null && newItem.organization_id !== orgId) return;
           const lat = Number(newItem.lat);
           const lng = Number(newItem.lng);
-          const status = newItem.status === "found" ? "found" : "active";
+          const status = normalizeTokenStatus((newItem as { status?: string }).status);
           const token: MapTokenRow = {
             id: newItem.id,
             lat: Number.isFinite(lat) ? lat : 0,
@@ -292,6 +295,8 @@ export default function MapView({
             organization_id: newItem.organization_id ?? null,
             campaign_id: newItem.campaign_id ?? null,
             redeemed_at: typeof newItem.redeemed_at === "string" ? newItem.redeemed_at : null,
+            nfc_uid: (newItem as { nfc_uid?: string | null }).nfc_uid ?? null,
+            asset_uuid: (newItem as { asset_uuid?: string | null }).asset_uuid ?? null,
           };
           setTokens((prev) => [...prev, token]);
           setNewTokenIds((prev) => new Set(prev).add(token.id));
@@ -350,11 +355,16 @@ export default function MapView({
   }, [orgId]);
 
   const displayTokens = useMemo(() => {
-    let list = statusFilter === "all" ? tokens : tokens.filter((t) => t.status === statusFilter);
+    let list =
+      statusFilter === "all"
+        ? tokens
+        : statusFilter === "found"
+          ? tokens.filter((t) => t.status === "REDEEMED")
+          : tokens.filter((t) => t.status !== "REDEEMED");
     if (timeFilter === "24h" || timeFilter === "7d") {
       const hours = timeFilter === "24h" ? 24 : 168;
       const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-      list = list.filter((t) => t.status === "found" && t.redeemed_at != null && t.redeemed_at >= since);
+      list = list.filter((t) => t.status === "REDEEMED" && t.redeemed_at != null && t.redeemed_at >= since);
     }
     if (selectedCampaignId != null && selectedCampaignId !== "") {
       list = list.filter((t) => t.campaign_id === selectedCampaignId);
@@ -516,8 +526,8 @@ export default function MapView({
   const orgIdsInView = Array.from(
     new Set(displayTokens.map((t) => t.organization_id).filter(Boolean) as string[])
   );
-  const hasActiveInView = displayTokens.some((t) => t.status === "active");
-  const hasFoundInView = displayTokens.some((t) => t.status === "found");
+  const hasActiveInView = displayTokens.some((t) => t.status !== "REDEEMED");
+  const hasFoundInView = displayTokens.some((t) => t.status === "REDEEMED");
   const orgName = (id: string | null) =>
     id ? organizations.find((o) => o.id === id)?.name ?? id.slice(0, 8) : "—";
 
@@ -644,7 +654,7 @@ export default function MapView({
                   const tokenId = (cluster.properties as { id?: string }).id;
                   const t = displayTokens.find((tok) => tok.id === tokenId);
                   if (!t) return null;
-                  const active = t.status === "active";
+                  const active = t.status !== "REDEEMED";
                   const justFound = justFoundIds.has(t.id);
                   const isNew = newTokenIds.has(t.id);
                   const useScalablePalette = multiOrg;
@@ -668,7 +678,7 @@ export default function MapView({
                   );
                 })
               : displayTokens.map((t) => {
-              const active = t.status === "active";
+              const active = t.status !== "REDEEMED";
               const justFound = justFoundIds.has(t.id);
               const isNew = newTokenIds.has(t.id);
               const useScalablePalette = multiOrg;

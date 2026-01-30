@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import ClaimForm from "@/components/claim-form";
 import { getRedemptionSuccessMessage } from "@/app/actions";
 import type { Campaign, Token } from "@/types";
+import { normalizeTokenStatus } from "@/types";
 
 // STRICT REGEX: Anchors (^...$) prevent invalid IDs from hitting the DB
 const UUID_REGEX =
@@ -62,7 +63,7 @@ async function getTokenForClaim(
   try {
     const { data: token, error } = await supabaseAdmin
       .from("tokens")
-      .select("id, lat, lng, status, organization_id, campaign_id, balance")
+      .select("id, lat, lng, status, organization_id, campaign_id, balance, nfc_uid, asset_uuid")
       .eq("id", id)
       .maybeSingle();
 
@@ -77,11 +78,12 @@ async function getTokenForClaim(
     }
 
     const balance = token.balance != null ? Number(token.balance) : 0;
+    const status = normalizeTokenStatus((token as { status: string }).status);
     const tokenData: Token & { balance?: number } = {
       id: token.id,
       lat: Number(token.lat) || 0,
       lng: Number(token.lng) || 0,
-      status: token.status === "found" ? "found" : "active",
+      status,
       organization_id: token.organization_id ?? null,
       ...(Number.isFinite(balance) ? { balance } : {}),
     };
@@ -113,12 +115,16 @@ async function getTokenForClaim(
 
 export default async function ClaimPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const { id } = await params;
   const rawId = Array.isArray(id) ? id[0] : id ?? "";
   const normalizedId = normalizeClaimId(rawId);
+  const resolvedSearchParams = (await (searchParams ?? Promise.resolve({}))) as Record<string, string | string[] | undefined>;
+  const signature = typeof resolvedSearchParams?.signature === "string" ? resolvedSearchParams.signature : undefined;
   
   if (!normalizedId) {
     return <ErrorScreen title="INVALID LINK" msg="No token ID provided." />;
@@ -133,11 +139,31 @@ export default async function ClaimPage({
 
   const { token, campaign } = result;
 
-  if (token.status === "found") {
+  if (token.status === "REDEEMED") {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
         <div className="mb-4 text-6xl">💀</div>
         <h1 className="text-2xl font-bold text-zinc-300">ALREADY CLAIMED</h1>
+      </div>
+    );
+  }
+
+  if (token.status === "PENDING_SETTLEMENT") {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
+        <div className="mb-4 text-6xl">⏳</div>
+        <h1 className="text-2xl font-bold text-zinc-300">Processing your reward</h1>
+        <p className="mt-2 text-center text-zinc-500">Your $25 payout is being processed. Check your Venmo shortly.</p>
+      </div>
+    );
+  }
+
+  if (token.status !== "ACTIVE") {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
+        <div className="mb-4 text-6xl">🔒</div>
+        <h1 className="text-2xl font-bold text-zinc-300">NOT READY</h1>
+        <p className="mt-2 text-center text-zinc-500">This token is not currently available to claim.</p>
       </div>
     );
   }
@@ -162,6 +188,7 @@ export default async function ClaimPage({
         <ClaimForm
           tokenId={token.id}
           campaign={campaign}
+          signature={signature}
           redemptionSuccessNote={redemptionMessage.note}
           redemptionSuccessLink={redemptionMessage.link}
         />

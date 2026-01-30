@@ -461,11 +461,12 @@ export default function CampaignDetailPage() {
     : [];
   const displayRequired = fromCampaign.length > 0 ? fromCampaign : CAMPAIGN_REQUIRED_FIELDS;
 
+  // Deleted/archived takes precedence: do not show "active" when campaign is deleted or archived
   const status =
-    campaign.status === "draft" || campaign.status === "active" || campaign.status === "inactive"
-      ? campaign.status
-      : campaign.deleted_at || campaign.archived_at
-        ? "inactive"
+    campaign.deleted_at || campaign.archived_at
+      ? "inactive"
+      : campaign.status === "draft" || campaign.status === "active" || campaign.status === "inactive"
+        ? campaign.status
         : "draft";
   const launchedAt = campaign.launched_at ? new Date(campaign.launched_at) : null;
   const launchedAtMs = launchedAt?.getTime();
