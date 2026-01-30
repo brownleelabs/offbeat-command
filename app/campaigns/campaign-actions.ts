@@ -1,13 +1,13 @@
 'use server'
 
 import { createServerSupabase } from '@/lib/supabase-server'
+import { requireSuperAdmin } from '@/lib/auth-server'
+import { isUuidLike, clampInt } from '@/lib/validation'
 import { CAMPAIGN_REQUIRED_FIELDS } from '@/types'
 import type { CampaignRequiredField, CampaignQuestion } from '@/types'
 
 // Store as Set<string> because JSON payloads provide string keys (runtime validation still enforced).
 const ALLOWED_REQUIRED_FIELD_KEYS = new Set<string>(CAMPAIGN_REQUIRED_FIELDS.map((f) => f.key))
-
-const SUPER_ADMIN_ONLY = 'Only SUPER_ADMIN can perform this action.'
 
 /** Design scale: list pagination and indexes support up to 10,000 campaigns. */
 const MAX_CAMPAIGNS_DESIGN = 10_000
@@ -42,22 +42,6 @@ async function logCampaignAudit(
   }
 }
 
-async function requireSuperAdmin(): Promise<
-  { ok: true; userId: string | null } | { ok: false; error: string }
-> {
-  const supabase = await createServerSupabase()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'Not authenticated.' }
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single()
-  const role = (profile as { role?: string } | null)?.role
-  if (role !== 'SUPER_ADMIN') return { ok: false, error: SUPER_ADMIN_ONLY }
-  return { ok: true, userId: user.id }
-}
-
 export type ListCampaignsInput = {
   page: number
   pageSize: number
@@ -70,17 +54,6 @@ export type ListCampaignsInput = {
 export type ListCampaignsResult<T> =
   | { success: true; rows: T[]; total: number }
   | { success: false; error: string }
-
-function clampInt(n: unknown, { min, max, fallback }: { min: number; max: number; fallback: number }) {
-  const v = typeof n === 'number' ? n : Number(n)
-  if (!Number.isFinite(v)) return fallback
-  const i = Math.trunc(v)
-  return Math.min(max, Math.max(min, i))
-}
-
-function isUuidLike(s: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
-}
 
 export async function listCampaigns<T = unknown>(
   input: ListCampaignsInput
@@ -144,7 +117,7 @@ export async function listCampaigns<T = unknown>(
         ? Math.min(Math.floor(rawTotal), MAX_CAMPAIGNS_DESIGN)
         : 0
     return { success: true, rows: rows as T[], total }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Failed to load campaigns.' }
   }
 }
@@ -166,7 +139,7 @@ export async function getCampaign(id: string): Promise<
 
     if (error || !data) return { success: false, error: 'Campaign not found.' }
     return { success: true, campaign: data }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Failed to load campaign.' }
   }
 }
@@ -207,7 +180,7 @@ export async function getCampaignAuditLog(
       actor_user_id: row.actor_user_id ?? null,
     }))
     return { success: true, events }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Failed to load audit log.' }
   }
 }
@@ -327,7 +300,7 @@ export async function insertCampaign(
     if (typeof id !== 'string' || id.length === 0 || !isUuidLike(id)) return { success: false, error: 'Insert failed.' }
     await logCampaignAudit(supabase, id, 'created', userId, { name, organization_id: organizationId })
     return { success: true, id }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Insert failed.' }
   }
 }
@@ -402,8 +375,12 @@ export async function updateCampaign(
       if ('name' in updates || 'required_fields' in updates || 'questions' in updates) {
         return { success: false, error: 'Only draft campaigns can be edited.' }
       }
+      // Allow active → inactive (deactivate); block any other status change for non-draft
       if (updates.status && updates.status !== currentStatus) {
-        return { success: false, error: 'Only draft campaigns can change status.' }
+        const isDeactivate = currentStatus === 'active' && updates.status === 'inactive'
+        if (!isDeactivate) {
+          return { success: false, error: 'Only draft campaigns can change status.' }
+        }
       }
     }
 
@@ -420,7 +397,7 @@ export async function updateCampaign(
     const eventType: CampaignAuditEventType = didLaunch ? 'launched' : 'updated'
     await logCampaignAudit(supabase, id, eventType, auth.userId ?? null, updates as Record<string, unknown>)
     return { success: true }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Update failed.' }
   }
 }
@@ -437,8 +414,8 @@ export async function archiveCampaigns(
     if (!auth.ok) return { success: false, error: auth.error }
     const validIds = [...new Set(
       idsList.filter((id) => typeof id === 'string' && id.length > 0 && isUuidLike(id))
-    )].slice(0, BATCH_IDS_MAX)
-    if (idsList.length > BATCH_IDS_MAX) return { success: false, error: `Too many campaigns (max ${BATCH_IDS_MAX} per batch).` }
+    )]
+    if (validIds.length > BATCH_IDS_MAX) return { success: false, error: `Too many campaigns (max ${BATCH_IDS_MAX} per batch).` }
     if (validIds.length === 0) {
       return idsList.length > 0
         ? { success: false, error: 'No valid campaign IDs.' }
@@ -460,7 +437,7 @@ export async function archiveCampaigns(
       await logCampaignAudit(supabase, cid, eventType, userId, { archived })
     }
     return { success: true }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Update failed.' }
   }
 }
@@ -475,8 +452,8 @@ export async function softDeleteCampaigns(
     if (!auth.ok) return { success: false, error: auth.error }
     const validIds = [...new Set(
       idsList.filter((id) => typeof id === 'string' && id.length > 0 && isUuidLike(id))
-    )].slice(0, BATCH_IDS_MAX)
-    if (idsList.length > BATCH_IDS_MAX) return { success: false, error: `Too many campaigns (max ${BATCH_IDS_MAX} per batch).` }
+    )]
+    if (validIds.length > BATCH_IDS_MAX) return { success: false, error: `Too many campaigns (max ${BATCH_IDS_MAX} per batch).` }
     if (validIds.length === 0) {
       return idsList.length > 0
         ? { success: false, error: 'No valid campaign IDs.' }
@@ -498,7 +475,7 @@ export async function softDeleteCampaigns(
       await logCampaignAudit(supabase, cid, eventType, userId, { deleted })
     }
     return { success: true }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Update failed.' }
   }
 }
@@ -549,7 +526,7 @@ export async function markCampaignViewed(
     if (error) return { success: false, error: 'Update failed.' }
     await logCampaignAudit(supabase, id, 'viewed', auth.userId ?? null)
     return { success: true }
-  } catch (err) {
+  } catch {
     return { success: false, error: 'Update failed.' }
   }
 }

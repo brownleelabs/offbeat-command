@@ -51,9 +51,13 @@ function getCurrentPositionAsync(
 interface ClaimFormProps {
   tokenId: string;
   campaign: Campaign | null;
+  /** Configurable note shown below Venmo line on success (Settings). */
+  redemptionSuccessNote?: string | null;
+  /** Optional URL shown as "Visit [link]" below note (Settings). */
+  redemptionSuccessLink?: string | null;
 }
 
-export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
+export default function ClaimForm({ tokenId, campaign, redemptionSuccessNote, redemptionSuccessLink }: ClaimFormProps) {
   const [status, setStatus] = useState<"form" | "submitting" | "success" | "error">("form");
   const [submitPhase, setSubmitPhase] = useState<SubmitPhase>("saving");
   const [errorMsg, setErrorMsg] = useState("");
@@ -68,19 +72,10 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
   const tapOpenedAt = useMemo(() => new Date().toISOString(), []);
 
   async function handleSubmit(e: React.FormEvent) {
-    // LOG: Rocket log at the ABSOLUTE BEGINNING - first statement to verify click is registered
-    console.log('[ClaimForm] 🚀 Calling submitClaim server action:', {
-      tokenId: tokenId.slice(0, 8) + '...',
-      campaignId: campaign?.id ? campaign.id.slice(0, 8) + '...' : 'null',
-      studentEmail,
-      timestamp: new Date().toISOString(),
-    });
-
     e.preventDefault();
-    
+
     // Guard: Prevent double submission
     if (status === "submitting" || status === "success") {
-      console.warn('[ClaimForm] ⚠️ Form submission blocked - already submitting or completed');
       return;
     }
 
@@ -117,13 +112,7 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         lat: coords?.lat ?? null,
         lng: coords?.lng ?? null,
         claimMetadata,
-      })
-
-      console.log('[ClaimForm] 📥 Server action response:', {
-        success: result.success,
-        error: result.success ? undefined : result.error,
-        timestamp: new Date().toISOString(),
-      })
+      });
 
       if (result.success) {
         setStatus("success");
@@ -132,11 +121,6 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         setErrorMsg(result.error || "Submission failed.");
       }
     } catch (err: unknown) {
-      console.error('[ClaimForm] ❌ Exception calling submitClaim:', {
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-        timestamp: new Date().toISOString(),
-      })
       setStatus("error");
       setErrorMsg(err instanceof Error ? err.message : "Submission failed.");
     }
@@ -145,6 +129,10 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
   const questions = Array.isArray(campaign?.questions) ? campaign.questions : [];
 
   if (status === "success") {
+    const hasNote = redemptionSuccessNote != null && String(redemptionSuccessNote).trim().length > 0;
+    const hasLink = redemptionSuccessLink != null && String(redemptionSuccessLink).trim().length > 0;
+    const noteText = hasNote ? String(redemptionSuccessNote).trim().slice(0, 200) : "";
+    const linkUrl = hasLink ? String(redemptionSuccessLink).trim().slice(0, 2048) : "";
     return (
       <div className="text-center">
         <h1 className="mb-4 text-4xl font-bold text-success">ACCESS GRANTED</h1>
@@ -152,6 +140,21 @@ export default function ClaimForm({ tokenId, campaign }: ClaimFormProps) {
         <p className="mt-2 text-sm text-muted-foreground">
           Payout will be sent to your Venmo.
         </p>
+        {noteText ? (
+          <p className="mt-4 text-sm text-muted-foreground whitespace-pre-wrap">{noteText}</p>
+        ) : null}
+        {linkUrl ? (
+          <p className="mt-2">
+            <a
+              href={linkUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-primary underline hover:no-underline"
+            >
+              Visit website
+            </a>
+          </p>
+        ) : null}
       </div>
     );
   }

@@ -85,6 +85,10 @@ export interface TokenWithCampaign extends Token {
   campaigns: { name: string } | null;
   /** Present when query includes organizations join; used for org column when SUPER_ADMIN or AUDITOR. */
   organizations?: { name: string } | null;
+  /** Token balance in USD; 0 until funds are loaded. */
+  balance?: number;
+  /** When the token/asset was created (Fleet table Created column). */
+  created_at?: string | null;
 }
 
 export type UserRole = "SUPER_ADMIN" | "ORG_ADMIN" | "AUDITOR" | "STUDENT";
@@ -94,6 +98,9 @@ export interface UserProfile {
   email: string;
   role: UserRole;
   organization_id: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
 }
 
 /** Deal scenario stored in deal_scenarios table. */

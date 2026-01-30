@@ -26,10 +26,23 @@ create index if not exists idx_responses_token_id on public.responses (token_id)
 create index if not exists idx_responses_organization_id on public.responses (organization_id);
 create index if not exists idx_responses_created_at on public.responses (created_at desc);
 
--- Data integrity: prevent duplicate submissions for the same token
-create unique index if not exists uidx_responses_token_id_unique
-  on public.responses (token_id)
-  where token_id is not null;
+-- Data integrity: one response per token (no duplicate claims). Skip unique index if duplicates exist.
+do $$
+begin
+  if exists (
+    select 1 from public.responses
+    where token_id is not null
+    group by token_id
+    having count(*) > 1
+    limit 1
+  ) then
+    raise notice 'Skipping uidx_responses_token_id_unique: duplicate token_id values exist in responses. Fix data then create index manually.';
+  else
+    create unique index if not exists uidx_responses_token_id_unique
+      on public.responses (token_id)
+      where token_id is not null;
+  end if;
+end $$;
 
 -- RLS: SUPER_ADMIN only for now; later add org-scoped select for college staff
 alter table public.responses enable row level security;

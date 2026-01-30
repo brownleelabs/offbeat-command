@@ -393,7 +393,7 @@ export default function CampaignDetailPage() {
     }
   }
 
-  async function handleDelete() {
+  async function _handleDelete() {
     if (!id) return;
     setDeleting(true);
     setSaveError("");
@@ -455,7 +455,7 @@ export default function CampaignDetailPage() {
     );
   }
 
-  const requiredCount = CAMPAIGN_REQUIRED_FIELDS.length;
+  const _requiredCount = CAMPAIGN_REQUIRED_FIELDS.length;
   const fromCampaign = Array.isArray(campaign.required_fields)
     ? campaign.required_fields.filter((f) => f != null && typeof f === "object")
     : [];

@@ -25,13 +25,14 @@ Shared terminology for describing dashboard elements to enable rapid UI changes.
 
 ### 3. **Executive Stats Banner** (or "Stats Banner", "Metrics Bar")
 - **Location**: Below Nav Bar, above main content
-- **Purpose**: Persistent financial/operational metrics
-- **Current styling**: `border-b border-white/10 bg-background/95 px-6 py-6` with grid of 3 stat cards
-- **Code location**: `dashboard-client.tsx` lines 485-489 (render), 576-645 (component)
+- **Purpose**: Identity (who you are: email, role, org) + persistent financial/operational metrics + **Command Center** (Total Yield Disbursed, Active Assets) on the far right; all consistent across tabs
+- **Current styling**: Single row, `px-4 py-3` (compact), flex wrap; **You are** (no border) on left; stat pills with % change (green positive, red negative); **Command Center** block on far right with "Live" indicator and subtle pulse on numbers
+- **Code location**: `dashboard-client.tsx` (ExecutiveStats component, called from main)
 - **Variants**:
-  - **GLOBAL view**: Global AUM, Net Treasury Yield, Active Campuses
-  - **TENANT view**: Campus Liquidity, Yield Earned, Active Fleet
-- **Note**: Always visible regardless of active tab
+  - **GLOBAL view**: Identity "email · SUPER_ADMIN · GLOBAL" | Global AUM, Net Treasury Yield, Active Campuses, Total Assets (scope) | **Command Center**: $ Total Yield Disbursed, Active Assets X/Y
+  - **TENANT view**: Identity "email · Role · Org name" | Campus Liquidity, Yield Earned, Active Fleet, Claimed, Redemptions | **Command Center**: $ Total Yield Disbursed, Active Assets X/Y
+- **Live data**: % change indicators (green/red) and "Live" badge + pulse on Command Center numbers; values will be wired to BENJI API for real-time yield
+- **Note**: Always visible regardless of active tab; Command Center was moved from Map tab into this banner so it is consistent across all pages
 
 ### 4. **Main Content Area** (or "Content Pane", "Tab Content")
 - **Location**: Below Executive Stats Banner
@@ -42,7 +43,7 @@ Shared terminology for describing dashboard elements to enable rapid UI changes.
   - **Map Tab**: Full-screen map view (`MapView` component)
   - **Fleet Tab**: Fleet management table and controls (`FleetTab` component)
   - **Campaigns Tab**: Campaign creation and list (`CampaignsTab` component)
-  - **Settings Tab**: Role permissions (SUPER_ADMIN only) (`SettingsTab` component)
+  - **Settings Tab**: Role permissions, Redemption success message, token creation (SUPER_ADMIN only) (`SettingsTab` component)
 
 ## Sub-Components (within tabs)
 
@@ -50,6 +51,9 @@ Shared terminology for describing dashboard elements to enable rapid UI changes.
 - **Control Bar**: Top toolbar with campaign/org selectors and action buttons
 - **Fleet Table**: Main data table showing tokens/assets
 - **Empty State**: Centered icon + message when no tokens
+
+### Claim flow
+- **Claim success page:** After a successful claim, shows &quot;ACCESS GRANTED&quot;, &quot;Asset Secured: $25.00&quot;, &quot;Payout will be sent to your Venmo.&quot; Below that, an optional **Redemption success message** (note + optional website link) can be configured in **Settings → Redemption success message** (max 200 characters for note). If empty, nothing is shown.
 
 ### Campaigns Tab Structure
 - **Create Campaign Section**: Form for new campaigns (left column in grid)

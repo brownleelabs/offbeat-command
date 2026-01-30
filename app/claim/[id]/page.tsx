@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import ClaimForm from "@/components/claim-form";
+import { getRedemptionSuccessMessage } from "@/app/actions";
 import type { Campaign, Token } from "@/types";
 
 // STRICT REGEX: Anchors (^...$) prevent invalid IDs from hitting the DB
@@ -61,7 +62,7 @@ async function getTokenForClaim(
   try {
     const { data: token, error } = await supabaseAdmin
       .from("tokens")
-      .select("id, lat, lng, status, organization_id, campaign_id")
+      .select("id, lat, lng, status, organization_id, campaign_id, balance")
       .eq("id", id)
       .maybeSingle();
 
@@ -75,12 +76,14 @@ async function getTokenForClaim(
       return null;
     }
 
-    const tokenData: Token = {
+    const balance = token.balance != null ? Number(token.balance) : 0;
+    const tokenData: Token & { balance?: number } = {
       id: token.id,
       lat: Number(token.lat) || 0,
       lng: Number(token.lng) || 0,
       status: token.status === "found" ? "found" : "active",
       organization_id: token.organization_id ?? null,
+      ...(Number.isFinite(balance) ? { balance } : {}),
     };
 
     let campaign: Campaign | null = null;
@@ -139,10 +142,29 @@ export default async function ClaimPage({
     );
   }
 
+  const tokenBalance = (token as Token & { balance?: number }).balance;
+  const hasValue = tokenBalance != null && Number(tokenBalance) > 0;
+  if (!hasValue) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center bg-black p-6 text-white">
+        <div className="mb-4 text-6xl">🔒</div>
+        <h1 className="text-2xl font-bold text-zinc-300">NO VALUE</h1>
+        <p className="mt-2 text-center text-zinc-500">This token has no balance and cannot be redeemed.</p>
+      </div>
+    );
+  }
+
+  const redemptionMessage = await getRedemptionSuccessMessage();
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-black p-4">
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 backdrop-blur-xl">
-        <ClaimForm tokenId={token.id} campaign={campaign} />
+        <ClaimForm
+          tokenId={token.id}
+          campaign={campaign}
+          redemptionSuccessNote={redemptionMessage.note}
+          redemptionSuccessLink={redemptionMessage.link}
+        />
       </div>
     </main>
   );
