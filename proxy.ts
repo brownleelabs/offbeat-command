@@ -39,8 +39,8 @@ export async function proxy(request: NextRequest) {
           return request.cookies.getAll();
         },
         // FIX: Explicitly typed parameter to satisfy Vercel build
-        setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
-          cookiesToSet.forEach(({ name, value, options }) =>
+        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
+          cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
           response = NextResponse.next({

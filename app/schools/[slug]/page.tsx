@@ -8,32 +8,38 @@ import MapView from "@/components/map-view";
 
 type OrgRow = { id: string; name: string; slug: string };
 
+type Fetched = { slug: string; org: OrgRow | null; notFound: boolean };
+
 export default function SchoolMapPage() {
   const params = useParams();
   const slug = typeof params.slug === "string" ? params.slug : params.slug?.[0] ?? "";
-  const [org, setOrg] = useState<OrgRow | null>(null);
-  const [notFound, setNotFound] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [fetched, setFetched] = useState<Fetched | null>(null);
 
   useEffect(() => {
     if (!slug) return;
-    setLoading(true);
-    setNotFound(false);
     const supabase = createClient();
+    let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("organizations")
         .select("id, name, slug")
         .eq("slug", slug)
         .single();
+      if (cancelled) return;
       if (error || !data) {
-        setNotFound(true);
-        setOrg(null);
+        setFetched({ slug, org: null, notFound: true });
       } else {
-        setOrg(data as OrgRow);
+        setFetched({ slug, org: data as OrgRow, notFound: false });
       }
-    })().finally(() => setLoading(false));
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
+
+  const loading = Boolean(slug && (fetched === null || fetched.slug !== slug));
+  const org = fetched?.slug === slug ? fetched.org : null;
+  const notFound = fetched?.slug === slug ? fetched.notFound : false;
 
   if (loading) {
     return (

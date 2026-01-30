@@ -1,24 +1,8 @@
 'use server'
 
 import { createServerSupabase } from '@/lib/supabase-server'
-
-const SUPER_ADMIN_ONLY = 'Only SUPER_ADMIN can perform this action.'
-
-async function requireSuperAdmin(): Promise<
-  { ok: true; userId: string | null } | { ok: false; error: string }
-> {
-  const supabase = await createServerSupabase()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { ok: false, error: 'Not authenticated.' }
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single()
-  const role = (profile as { role?: string } | null)?.role
-  if (role !== 'SUPER_ADMIN') return { ok: false, error: SUPER_ADMIN_ONLY }
-  return { ok: true, userId: user.id }
-}
+import { requireSuperAdmin } from '@/lib/auth-server'
+import { isUuidLike, clampInt } from '@/lib/validation'
 
 export type ListDealScenariosInput = {
   page: number
@@ -31,17 +15,6 @@ export type ListDealScenariosInput = {
 export type ListDealScenariosResult<T> =
   | { success: true; rows: T[]; total: number }
   | { success: false; error: string }
-
-function clampInt(n: unknown, { min, max, fallback }: { min: number; max: number; fallback: number }) {
-  const v = typeof n === 'number' ? n : Number(n)
-  if (!Number.isFinite(v)) return fallback
-  const i = Math.trunc(v)
-  return Math.min(max, Math.max(min, i))
-}
-
-function isUuidLike(s: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
-}
 
 export async function listDealScenarios<T = unknown>(
   input: ListDealScenariosInput

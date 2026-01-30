@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { DashboardProvider } from "@/components/dashboard-context";
+import { DashboardErrorBoundary } from "@/components/dashboard-error-boundary";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -28,9 +29,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} h-screen min-h-screen bg-black text-emerald-400 antialiased`}
       >
-        <DashboardProvider>
-          {children}
-        </DashboardProvider>
+        <DashboardErrorBoundary>
+          <DashboardProvider>{children}</DashboardProvider>
+        </DashboardErrorBoundary>
       </body>
     </html>
   );

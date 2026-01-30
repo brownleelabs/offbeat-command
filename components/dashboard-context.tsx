@@ -37,6 +37,8 @@ interface DashboardContextValue {
   viewMode: ViewMode;
   /** Toggle between GLOBAL and TENANT. No-op unless role === 'SUPER_ADMIN'. */
   toggleViewMode: () => void;
+  /** Set view mode (e.g. from Map org filter). Used so SUPER_ADMIN can switch to TENANT when picking an org. */
+  setViewMode: (mode: ViewMode) => void;
   /** When viewMode === 'TENANT' and SUPER_ADMIN, the org selected. Ignored for other roles. */
   selectedOrgId: string | null;
   setSelectedOrgId: (id: string | null) => void;
@@ -83,7 +85,9 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
         if (cancelled) return;
 
         if (authError) {
-          console.warn("[DashboardContext] Auth error:", authError.message);
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[DashboardContext] Auth error:", authError.message);
+          }
           setAuthError(authError.message);
           setProfile(null);
           setLoading(false);
@@ -91,34 +95,38 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
         }
         setAuthError(null);
         if (!user) {
-          console.warn("[DashboardContext] No auth user");
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[DashboardContext] No auth user");
+          }
           setProfile(null);
           setLoading(false);
           return;
         }
 
-        console.log("[DashboardContext] Auth user id:", user.id, "email:", user.email);
-
         const { data, error } = await supabase
           .from("profiles")
-          .select("id, email, role, organization_id")
+          .select("id, email, role, organization_id, first_name, last_name, phone")
           .eq("id", user.id)
           .single();
 
         if (cancelled) return;
 
         if (error) {
-          console.error("[DashboardContext] Profiles fetch error:", {
-            message: error.message,
-            code: error.code,
-            details: error.details,
-          });
+          if (process.env.NODE_ENV === "development") {
+            console.error("[DashboardContext] Profiles fetch error:", {
+              message: error.message,
+              code: error.code,
+              details: error.details,
+            });
+          }
           setProfile(null);
           setLoading(false);
           return;
         }
         if (!data) {
-          console.warn("[DashboardContext] Profiles fetch: no data (0 rows)");
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[DashboardContext] Profiles fetch: no data (0 rows)");
+          }
           setProfile(null);
           setLoading(false);
           return;
@@ -132,10 +140,15 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
           email: String(raw.email ?? ""),
           role,
           organization_id: raw.organization_id != null ? String(raw.organization_id) : null,
+          first_name: raw.first_name != null ? String(raw.first_name) : null,
+          last_name: raw.last_name != null ? String(raw.last_name) : null,
+          phone: raw.phone != null ? String(raw.phone) : null,
         });
       } catch (err) {
         if (!cancelled) {
-          console.error("[DashboardContext] Fetch profile exception:", err);
+          if (process.env.NODE_ENV === "development") {
+            console.error("[DashboardContext] Fetch profile exception:", err);
+          }
           setProfile(null);
         }
       } finally {
@@ -156,6 +169,8 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
     if (profile.role !== "SUPER_ADMIN") {
       setViewMode("TENANT");
     }
+    // profile object identity intentionally not in deps to avoid toggling on every profile ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id, profile?.role]);
 
   const toggleViewMode = useCallback(() => {
@@ -192,6 +207,7 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
       dataScopeOrgId,
       viewMode,
       toggleViewMode: effectiveToggleViewMode,
+      setViewMode,
       selectedOrgId,
       setSelectedOrgId,
       profile,
@@ -204,6 +220,7 @@ export function DashboardProvider({ children }: DashboardProviderProps) {
       dataScopeOrgId,
       viewMode,
       effectiveToggleViewMode,
+      setViewMode,
       selectedOrgId,
       loading,
       authError,

@@ -126,11 +126,6 @@ const currency0 = new Intl.NumberFormat("en-US", {
   currency: "USD",
   maximumFractionDigits: 0,
 });
-const currency2 = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 2,
-});
 const number0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const percent2 = new Intl.NumberFormat("en-US", {
   style: "percent",
@@ -465,9 +460,9 @@ function ZoneBadge({ zone }: { zone: DealZone | null }) {
 }
 
 export function DealDeskContent() {
-  const { userRole, loading: authLoading } = useDashboard();
+  const { userRole } = useDashboard();
 
-  const [scenarioId, setScenarioId] = useState<string | null>(null);
+  const [_scenarioId, setScenarioId] = useState<string | null>(null);
   const [scenarioGroupId, setScenarioGroupId] = useState<string | null>(null);
   const [scenarioName, setScenarioName] = useState<string>("");
   const [universityName, setUniversityName] = useState<string>("");
@@ -1062,27 +1057,6 @@ export function DealDeskContent() {
     }
   }
 
-  if (authLoading) {
-    return (
-      <div className="flex w-full items-center justify-center bg-background py-16 text-muted-foreground">
-        <div className="font-mono text-sm">AUTHENTICATING...</div>
-      </div>
-    );
-  }
-
-  if (userRole !== "SUPER_ADMIN") {
-    return (
-      <div className="flex w-full items-center justify-center bg-background p-6 text-foreground">
-        <div className="w-full max-w-xl rounded-2xl border border-accent bg-muted p-6">
-          <h1 className="mb-2 text-xl font-bold">Access Denied</h1>
-          <p className="text-sm text-muted-foreground">
-            The Deal Desk is a SUPER_ADMIN-only sales tool.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   const zone = computed.zone;
 
   const canCompute =
@@ -1370,7 +1344,7 @@ export function DealDeskContent() {
           <DynamicValue className="text-blue-400 font-semibold">
             {computed.allocation != null ? percent2.format(computed.allocation) : "—"}
           </DynamicValue>{" "}
-          of {inst}'s total endowment. The institution's Endowment Per Student (EPS) is approximately{" "}
+          of {inst}&apos;s total endowment. The institution&apos;s Endowment Per Student (EPS) is approximately{" "}
           <DynamicValue className="text-blue-400 font-semibold">
             {computed.eps != null ? currency0.format(computed.eps) : "—"}
           </DynamicValue>

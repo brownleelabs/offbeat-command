@@ -1,14 +1,15 @@
 'use server'
 
 import { headers } from 'next/headers'
-import { createClient } from '@supabase/supabase-js'
 import { Resend } from 'resend'
 import { createServerSupabase } from '@/lib/supabase-server'
+import { getSupabaseService, getSupabaseAnon, hasServiceRoleKey, requireProfile, requireSuperAdmin } from '@/lib/auth-server'
+import { isUuid } from '@/lib/validation'
 import {
-  type BulkAssignToSchoolResult,
   type SubmitClaimInput,
   type SubmitClaimResult,
 } from '@/lib/actions-constants'
+import { bulkAssignTokensToSchool } from '@/app/fleet/fleet-actions'
 import {
   CONTROLLABLE_ROLES,
   ROLE_PERMISSION_KEYS,
@@ -17,12 +18,9 @@ import {
 } from '@/lib/constants'
 import type { UserRole } from '@/types'
 
-// 1. STRICT VALIDATION & HELPERS
-const UUID_REGEX =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
+/** Alias for shared validation (used by claim, org, user actions). */
 function isValidUUID(id: string): boolean {
-  return UUID_REGEX.test(id)
+  return isUuid(id)
 }
 
 /**
@@ -41,28 +39,6 @@ function normalizeClaimTokenId(raw: string): string {
   return s
 }
 
-function getSupabaseAnon() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !key) {
-    console.error('[getSupabaseAnon] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY')
-    return null
-  }
-  return createClient(url, key)
-}
-function getSupabaseService() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !key) {
-    console.error('[getSupabaseService] Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
-    return null
-  }
-  return createClient(url, key)
-}
-
-function hasServiceRoleKey(): boolean {
-  return !!process.env.SUPABASE_SERVICE_ROLE_KEY
-}
 
 // 2. CORE ACTIONS
 
@@ -75,7 +51,8 @@ export async function claimToken(
     const supabase = getSupabaseAnon()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
-    const { data, error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
       .from('tokens')
       .update({ status: 'found' })
       .eq('id', id)
@@ -96,12 +73,39 @@ export async function resetDemo(
   orgId?: string | null
 ): Promise<{ success: true } | { success: false; error: string }> {
   try {
+    const profileResult = await requireProfile()
+    if (!profileResult.ok) return { success: false, error: 'Not authenticated.' }
+    const { role, organizationId: profileOrgId } = profileResult
+
+    if (role === 'SUPER_ADMIN') {
+      // Allow; scope by orgId when provided
+    } else if (role === 'ORG_ADMIN') {
+      const supabaseAuth = await createServerSupabase()
+      const { data: perms } = await supabaseAuth
+        .from('role_permissions')
+        .select('enabled')
+        .eq('role', 'ORG_ADMIN')
+        .eq('permission_key', 'map_reset')
+        .maybeSingle()
+      if (!(perms as { enabled?: boolean } | null)?.enabled) {
+        return { success: false, error: 'Not allowed.' }
+      }
+      // ORG_ADMIN may only reset their org's tokens; force scope to profile org
+      if (profileOrgId != null && orgId != null && String(orgId).trim() !== String(profileOrgId).trim()) {
+        return { success: false, error: 'Not allowed.' }
+      }
+    } else {
+      return { success: false, error: 'Not allowed.' }
+    }
+
     const supabase = await createServerSupabase()
     let query = supabase
       .from('tokens')
       .update({ status: 'active' })
       .neq('status', 'active')
-    if (orgId != null) query = query.eq('organization_id', orgId)
+    // SUPER_ADMIN: use orgId when provided; ORG_ADMIN: scope to their org
+    const scopeOrgId = role === 'ORG_ADMIN' ? profileOrgId : orgId
+    if (scopeOrgId != null) query = query.eq('organization_id', scopeOrgId)
     const { error } = await query
     if (error) {
       console.error('[resetDemo] DB error:', error.message)
@@ -142,10 +146,10 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       const campaignIdInput = typeof campaignId === 'string' ? campaignId.trim() : ''
 
     try {
-      // Fetch token with org + campaign to enforce business rules
+      // Fetch token with org + campaign + balance to enforce business rules
       const { data: token, error: tokenErr } = await supabase
         .from('tokens')
-        .select('id, organization_id, campaign_id, status')
+        .select('id, organization_id, campaign_id, status, balance')
         .eq('id', tokenId)
         .maybeSingle()
 
@@ -168,6 +172,13 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         return { success: false, error: 'This token has already been claimed.' }
       }
 
+      // Block redemption when token has no value (balance $0 or null)
+      const balanceRaw = (token as { balance?: number | null }).balance
+      const balanceNum = balanceRaw != null ? Number(balanceRaw) : 0
+      if (!Number.isFinite(balanceNum) || balanceNum <= 0) {
+        return { success: false, error: 'This token has no value and cannot be redeemed.' }
+      }
+
       // Enforce that token must be assigned to a campaign (valid UUID only; malformed DB data must not reach Supabase)
       const rawCampaignId = (token as { campaign_id?: unknown }).campaign_id
       const tokenCampaignId =
@@ -176,8 +187,8 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         return { success: false, error: 'This asset is not currently active.' }
       }
 
-      // Enforce that provided campaign matches token's campaign
-      if (!campaignIdInput || campaignIdInput !== tokenCampaignId) {
+      // Enforce that provided campaign matches token's campaign (case-insensitive UUID)
+      if (!campaignIdInput || campaignIdInput.toLowerCase() !== tokenCampaignId.toLowerCase()) {
         return { success: false, error: 'Invalid campaign for this token.' }
       }
 
@@ -210,6 +221,20 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       }
       if (camp.status !== 'active') {
         return { success: false, error: 'This campaign is not currently active.' }
+      }
+
+      // Duplicate claim: one reward per person per campaign (by student_email)
+      const emailNorm = String(studentEmail ?? '').trim().toLowerCase()
+      if (emailNorm) {
+        const { data: existing } = await supabase
+          .from('responses')
+          .select('id')
+          .eq('campaign_id', tokenCampaignId)
+          .ilike('student_email', emailNorm)
+          .limit(1)
+        if (existing != null && existing.length > 0) {
+          return { success: false, error: "You've already claimed a reward in this campaign." }
+        }
       }
 
       const rawOrgId = (token as { organization_id?: unknown }).organization_id ?? null
@@ -252,7 +277,8 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         safeClaimMetadata = { _server: serverHeaders, _submitted_at: new Date().toISOString() }
       }
 
-      const { error: insertErr } = await supabase.from('responses').insert({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: insertErr } = await (supabase as any).from('responses').insert({
         token_id: tokenId,
         campaign_id: tokenCampaignId,
         organization_id: orgId,
@@ -270,7 +296,8 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         if ((insertErr as { code?: string } | null)?.code === '23505') {
           // Best-effort: ensure token status converges to "found" even if a prior claim failed mid-flight.
           try {
-            await supabase.from('tokens').update({ status: 'found' }).eq('id', tokenId)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (supabase as any).from('tokens').update({ status: 'found', redeemed_at: new Date().toISOString() }).eq('id', tokenId)
           } catch {}
           return { success: false, error: 'This token has already been claimed.' }
         }
@@ -285,22 +312,24 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         return { success: false, error: 'Could not save response.' }
       }
 
-      const tokenUpdate: Record<string, unknown> = { status: 'found' }
+      const tokenUpdate: Record<string, unknown> = { status: 'found', redeemed_at: new Date().toISOString() }
       if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
         tokenUpdate.lat = lat
         tokenUpdate.lng = lng
       }
 
-      const { error: updateErr } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: updateErr } = await (supabase as any)
         .from('tokens')
         .update(tokenUpdate)
         .eq('id', tokenId)
 
       if (updateErr) {
         console.error('[submitClaim] token update error:', updateErr.message)
-        // Best-effort: retry with minimal payload (status only) to reduce inconsistent states.
+        // Best-effort: retry with minimal payload (status + redeemed_at) to reduce inconsistent states.
         try {
-          await supabase.from('tokens').update({ status: 'found' }).eq('id', tokenId)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase as any).from('tokens').update({ status: 'found', redeemed_at: new Date().toISOString() }).eq('id', tokenId)
         } catch {}
         // Non-fatal: response was saved; avoid prompting a retry that would create duplicates.
         return { success: true }
@@ -387,7 +416,8 @@ export async function getTokenForClaim(tokenId: string) {
         }
       }
 
-      return { token: { id: token.id, campaign_id: campaignId }, campaign }
+      const t = token as { id: string; campaign_id?: unknown }
+      return { token: { id: t.id, campaign_id: campaignId }, campaign }
     } catch (err) {
       console.error('[getTokenForClaim] DB exception:', err)
       return null
@@ -397,53 +427,9 @@ export async function getTokenForClaim(tokenId: string) {
   }
 }
 
-// 3. ADMIN FUNCTIONS
+// 3. ADMIN FUNCTIONS (bulkAssignTokensToSchool re-exported from @/app/fleet/fleet-actions)
 
-export async function bulkAssignTokensToSchool(
-  tokenIds: string[],
-  organizationId: string
-): Promise<BulkAssignToSchoolResult> {
-  if (!tokenIds?.length || !organizationId?.trim()) {
-    return { success: false, error: 'Select at least one token and a school.' }
-  }
-  try {
-    const supabaseAuth = await createServerSupabase()
-    const { data: { user } } = await supabaseAuth.auth.getUser()
-    if (!user) return { success: false, error: 'Not authenticated.' }
-
-    const { data: profile } = await supabaseAuth
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    const role = (profile as { role?: string } | null)?.role
-    if (role !== 'SUPER_ADMIN') {
-      return { success: false, error: 'Only SUPER_ADMIN can assign tokens to schools.' }
-    }
-
-    if (!hasServiceRoleKey()) {
-      return { success: false, error: 'Server configuration error.' }
-    }
-
-    const supabase = getSupabaseService()
-    if (!supabase) return { success: false, error: 'Server configuration error.' }
-    const ids = tokenIds.filter((id) => typeof id === 'string' && id.length > 0)
-    if (ids.length === 0) return { success: false, error: 'No valid token IDs.' }
-
-    const { error } = await supabase
-      .from('tokens')
-      .update({ organization_id: organizationId.trim() })
-      .in('id', ids)
-
-    if (error) {
-      return { success: false, error: error.message ?? 'Update failed.' }
-    }
-    return { success: true, count: ids.length }
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Assignment failed.' }
-  }
-}
+export { bulkAssignTokensToSchool }
 
 export async function getRolePermissions(): Promise<RolePermissionRow[]> {
   try {
@@ -484,7 +470,8 @@ export async function setRolePermission(
 
     const supabase = getSupabaseService()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
-    const { error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any)
       .from('role_permissions')
       .upsert({ role, permission_key: permissionKey, enabled, updated_at: new Date().toISOString() }, {
         onConflict: 'role,permission_key',
@@ -499,6 +486,69 @@ export async function setRolePermission(
   }
 }
 
+// Redemption success message (Phase 0: configurable note + link on claim success)
+const REDEMPTION_NOTE_MAX_LENGTH = 200
+const REDEMPTION_LINK_MAX_LENGTH = 2048
+
+export type RedemptionSuccessMessage = { note: string | null; link: string | null }
+
+/** Used by claim page (server) and Settings tab (client). Service role for claim-page read. */
+export async function getRedemptionSuccessMessage(): Promise<RedemptionSuccessMessage> {
+  try {
+    const supabase = getSupabaseService()
+    if (!supabase) return { note: null, link: null }
+    const { data, error } = await supabase
+      .from('site_settings')
+      .select('redemption_success_note, redemption_success_link')
+      .eq('id', 1)
+      .maybeSingle()
+    if (error || !data) return { note: null, link: null }
+    const row = data as { redemption_success_note?: string | null; redemption_success_link?: string | null }
+    const note =
+      typeof row.redemption_success_note === 'string' && row.redemption_success_note.trim().length > 0
+        ? row.redemption_success_note.trim().slice(0, REDEMPTION_NOTE_MAX_LENGTH)
+        : null
+    const link =
+      typeof row.redemption_success_link === 'string' && row.redemption_success_link.trim().length > 0
+        ? row.redemption_success_link.trim().slice(0, REDEMPTION_LINK_MAX_LENGTH)
+        : null
+    return { note, link }
+  } catch {
+    return { note: null, link: null }
+  }
+}
+
+export async function setRedemptionSuccessMessage(
+  note: string,
+  link: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const auth = await requireSuperAdmin()
+    if (!auth.ok) return { success: false, error: auth.error }
+
+    const noteVal = typeof note === 'string' ? note.trim().slice(0, REDEMPTION_NOTE_MAX_LENGTH) : ''
+    const linkVal = typeof link === 'string' ? link.trim().slice(0, REDEMPTION_LINK_MAX_LENGTH) : ''
+
+    const supabase = getSupabaseService()
+    if (!supabase) return { success: false, error: 'Server configuration error.' }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any)
+      .from('site_settings')
+      .update({
+        redemption_success_note: noteVal || null,
+        redemption_success_link: linkVal || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', 1)
+
+    if (error) return { success: false, error: error.message ?? 'Update failed.' }
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Update failed.' }
+  }
+}
+
 const VALID_ROLES: UserRole[] = ['SUPER_ADMIN', 'ORG_ADMIN', 'AUDITOR', 'STUDENT']
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const MIN_PASSWORD_LENGTH = 6
@@ -507,7 +557,8 @@ export async function createUserByEmail(
   email: string,
   password: string,
   role: string,
-  organizationId?: string
+  organizationId?: string,
+  options?: { firstName?: string; lastName?: string; phone?: string }
 ): Promise<{ success: true } | { success: false; error: string }> {
   try {
     const supabaseAuth = await createServerSupabase()
@@ -531,6 +582,13 @@ export async function createUserByEmail(
     }
     if (!VALID_ROLES.includes(role as UserRole)) {
       return { success: false, error: 'Invalid role. Must be one of: SUPER_ADMIN, ORG_ADMIN, AUDITOR, STUDENT.' }
+    }
+
+    const firstName = options?.firstName != null ? String(options.firstName).trim() : null
+    const lastName = options?.lastName != null ? String(options.lastName).trim() : null
+    const phone = options?.phone != null ? String(options.phone).trim() : null
+    if ((role === 'SUPER_ADMIN' || role === 'ORG_ADMIN') && !phone) {
+      return { success: false, error: 'Phone number is required for SuperAdmin and OrgAdmin access.' }
     }
 
     let orgId: string | null = null
@@ -560,7 +618,8 @@ export async function createUserByEmail(
       return { success: false, error: 'User created but no user id returned.' }
     }
 
-    const { error: profileError } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: profileError } = await (supabase as any)
       .from('profiles')
       .upsert(
         {
@@ -568,6 +627,9 @@ export async function createUserByEmail(
           email: trimmedEmail,
           role,
           organization_id: orgId ?? null,
+          first_name: firstName ?? null,
+          last_name: lastName ?? null,
+          phone: phone ?? null,
         },
         { onConflict: 'id' }
       )
@@ -588,6 +650,9 @@ export type ListUserRow = {
   organization_id: string | null
   organization_name: string | null
   last_sign_in_at: string | null
+  first_name: string | null
+  last_name: string | null
+  phone: string | null
 }
 
 const LIST_USERS_LIMIT = 100
@@ -613,7 +678,7 @@ export async function listUsers(): Promise<ListUserRow[]> {
 
     const { data: profileData, error: profileError } = await supabase
       .from('profiles')
-      .select('id, email, role, organization_id')
+      .select('id, email, role, organization_id, first_name, last_name, phone')
       .order('email')
       .limit(LIST_USERS_LIMIT)
 
@@ -628,24 +693,32 @@ export async function listUsers(): Promise<ListUserRow[]> {
     }
 
     const lastSignInMap = new Map<string, string | null>()
+    const profileIds = new Set((profileData as Array<{ id: string }>).map((r) => r.id))
     let authPage = 1
     const authPerPage = 1000
-    while (true) {
+    const maxAuthPages = 15
+    while (authPage <= maxAuthPages) {
       const { data: authData } = await supabase.auth.admin.listUsers({ page: authPage, perPage: authPerPage })
       const users = (authData?.users ?? []) as Array<{ id: string; last_sign_in_at?: string | null }>
       if (!users.length) break
-      users.forEach((u) => lastSignInMap.set(u.id, u.last_sign_in_at ?? null))
+      users.forEach((u) => {
+        if (profileIds.has(u.id)) lastSignInMap.set(u.id, u.last_sign_in_at ?? null)
+      })
+      if (lastSignInMap.size >= profileIds.size) break
       if (users.length < authPerPage) break
       authPage += 1
     }
 
-    return (profileData as Array<{ id: string; email: string; role: string; organization_id: string | null }>).map((r) => ({
+    return (profileData as Array<{ id: string; email: string; role: string; organization_id: string | null; first_name?: string | null; last_name?: string | null; phone?: string | null }>).map((r) => ({
       id: r.id,
       email: r.email,
       role: r.role,
       organization_id: r.organization_id,
       organization_name: r.organization_id ? orgNameMap.get(r.organization_id) ?? null : null,
       last_sign_in_at: lastSignInMap.get(r.id) ?? null,
+      first_name: r.first_name ?? null,
+      last_name: r.last_name ?? null,
+      phone: r.phone ?? null,
     }))
   } catch {
     return []
@@ -655,7 +728,8 @@ export async function listUsers(): Promise<ListUserRow[]> {
 export async function updateUserRole(
   profileId: string,
   role: string,
-  organizationId?: string | null
+  organizationId?: string | null,
+  profileFields?: { first_name?: string | null; last_name?: string | null; phone?: string | null }
 ): Promise<{ success: true } | { success: false; error: string }> {
   try {
     const supabaseAuth = await createServerSupabase()
@@ -677,6 +751,11 @@ export async function updateUserRole(
       return { success: false, error: 'Invalid role. Must be one of: SUPER_ADMIN, ORG_ADMIN, AUDITOR, STUDENT.' }
     }
 
+    if (role === 'SUPER_ADMIN' || role === 'ORG_ADMIN') {
+      const phoneVal = profileFields?.phone != null ? String(profileFields.phone).trim() : ''
+      if (!phoneVal) return { success: false, error: 'Phone number is required for SuperAdmin and OrgAdmin access.' }
+    }
+
     let orgId: string | null = null
     if (organizationId != null && String(organizationId).trim() !== '') {
       const trimmed = String(organizationId).trim()
@@ -687,9 +766,17 @@ export async function updateUserRole(
     const supabase = getSupabaseService()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
-    const { error } = await supabase
+    const updatePayload: Record<string, unknown> = { role, organization_id: orgId }
+    if (profileFields) {
+      if (profileFields.first_name !== undefined) updatePayload.first_name = profileFields.first_name ?? null
+      if (profileFields.last_name !== undefined) updatePayload.last_name = profileFields.last_name ?? null
+      if (profileFields.phone !== undefined) updatePayload.phone = profileFields.phone ?? null
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any)
       .from('profiles')
-      .update({ role, organization_id: orgId })
+      .update(updatePayload)
       .eq('id', profileId)
 
     if (error) return { success: false, error: error.message ?? 'Update failed.' }
@@ -776,7 +863,8 @@ export async function createOrganization(
     const supabase = getSupabaseService()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
-    const { error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any)
       .from('organizations')
       .insert({ name: trimmedName, slug: slugValue, type })
 
@@ -846,28 +934,34 @@ export async function deleteOrganization(
 
 export type SubmitAccessRequestInput = { name: string; email: string; institution?: string; message?: string }
 
+const ACCESS_REQUEST_NAME_MAX = 200
+const ACCESS_REQUEST_EMAIL_MAX = 320
+const ACCESS_REQUEST_INSTITUTION_MAX = 500
+const ACCESS_REQUEST_MESSAGE_MAX = 2000
+
 export async function submitAccessRequest(
   input: SubmitAccessRequestInput
 ): Promise<{ success: true } | { success: false; error: string }> {
   try {
-    const name = (input.name ?? '').trim()
-    const email = (input.email ?? '').trim()
-    const institution = (input.institution ?? '').trim() || null
-    const message = (input.message ?? '').trim() || null
+    const name = (input.name ?? '').trim().slice(0, ACCESS_REQUEST_NAME_MAX)
+    const email = (input.email ?? '').trim().slice(0, ACCESS_REQUEST_EMAIL_MAX)
+    const institution = (input.institution ?? '').trim().slice(0, ACCESS_REQUEST_INSTITUTION_MAX) || null
+    const message = (input.message ?? '').trim().slice(0, ACCESS_REQUEST_MESSAGE_MAX) || null
     if (!name) return { success: false, error: 'Name is required.' }
     if (!email) return { success: false, error: 'Email is required.' }
 
     const supabase = getSupabaseService()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
-    const apiKey = process.env.RESEND_API_KEY
-    const toEmail = process.env.ACCESS_REQUEST_EMAIL
-    if (!apiKey?.trim() || !toEmail?.trim()) {
+    const apiKey = (process.env.RESEND_API_KEY ?? '').trim()
+    const toEmail = (process.env.ACCESS_REQUEST_EMAIL ?? '').trim()
+    if (!apiKey || !toEmail) {
       console.error('[submitAccessRequest] Missing RESEND_API_KEY or ACCESS_REQUEST_EMAIL')
       return { success: false, error: 'Request access is temporarily unavailable. Please try again later or contact support.' }
     }
 
-    const { error: insertError } = await supabase.from('access_requests').insert({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: insertError } = await (supabase as any).from('access_requests').insert({
       name,
       email,
       institution,
@@ -882,7 +976,7 @@ export async function submitAccessRequest(
       }
     }
 
-    const fromEmail = process.env.RESEND_FROM ?? 'onboarding@resend.dev'
+    const fromEmail = (process.env.RESEND_FROM ?? 'onboarding@resend.dev').trim()
     const resend = new Resend(apiKey)
     const { error: emailError } = await resend.emails.send({
       from: fromEmail,
