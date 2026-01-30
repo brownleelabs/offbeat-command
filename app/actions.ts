@@ -10,13 +10,16 @@ import {
   type SubmitClaimResult,
 } from '@/lib/actions-constants'
 import { bulkAssignTokensToSchool } from '@/app/fleet/fleet-actions'
+import { executePayout } from '@/app/actions/payout'
+import { requireActiveTether, canTransition } from '@/lib/token-logic'
 import {
   CONTROLLABLE_ROLES,
   ROLE_PERMISSION_KEYS,
   type RolePermissionKey,
   type RolePermissionRow,
 } from '@/lib/constants'
-import type { UserRole } from '@/types'
+import type { UserRole, TokenStatus } from '@/types'
+import { normalizeTokenStatus } from '@/types'
 
 /** Alias for shared validation (used by claim, org, user actions). */
 function isValidUUID(id: string): boolean {
@@ -51,10 +54,24 @@ export async function claimToken(
     const supabase = getSupabaseAnon()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: row, error: fetchErr } = await (supabase as any)
+      .from('tokens')
+      .select('id, status')
+      .eq('id', id)
+      .maybeSingle()
+    if (fetchErr) {
+      console.error('[claimToken] DB error:', fetchErr.message)
+      return { success: false, error: 'Claim failed.' }
+    }
+    if (!row) return { success: false, error: 'Token ID not found.' }
+    const currentStatus = (row as { status?: string }).status
+    if (typeof currentStatus !== 'string' || !canTransition(currentStatus as TokenStatus, 'REDEEMED')) {
+      return { success: false, error: 'Token is not in a state that can be redeemed (only ACTIVE or PENDING_SETTLEMENT).' }
+    }
+
     const { data, error } = await (supabase as any)
       .from('tokens')
-      .update({ status: 'found' })
+      .update({ status: 'REDEEMED' })
       .eq('id', id)
       .select()
     if (error) {
@@ -101,8 +118,8 @@ export async function resetDemo(
     const supabase = await createServerSupabase()
     let query = supabase
       .from('tokens')
-      .update({ status: 'active' })
-      .neq('status', 'active')
+      .update({ status: 'DORMANT' })
+      .in('status', ['REDEEMED', 'PENDING_SETTLEMENT'])
     // SUPER_ADMIN: use orgId when provided; ORG_ADMIN: scope to their org
     const scopeOrgId = role === 'ORG_ADMIN' ? profileOrgId : orgId
     if (scopeOrgId != null) query = query.eq('organization_id', scopeOrgId)
@@ -146,10 +163,10 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       const campaignIdInput = typeof campaignId === 'string' ? campaignId.trim() : ''
 
     try {
-      // Fetch token with org + campaign + balance to enforce business rules
+      // Fetch token with org + campaign + balance + tether fields (6-state)
       const { data: token, error: tokenErr } = await supabase
         .from('tokens')
-        .select('id, organization_id, campaign_id, status, balance')
+        .select('id, organization_id, campaign_id, status, balance, asset_uuid, nfc_uid')
         .eq('id', tokenId)
         .maybeSingle()
 
@@ -167,9 +184,26 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         return { success: false, error: 'Token not found.' }
       }
 
-      // Block double-claims
-      if ((token as { status?: string }).status === 'found') {
+      const tokenStatus = normalizeTokenStatus((token as { status?: string }).status)
+      if (tokenStatus === 'REDEEMED') {
         return { success: false, error: 'This token has already been claimed.' }
+      }
+      if (tokenStatus === 'PENDING_SETTLEMENT') {
+        return { success: false, error: 'This token is already being processed.' }
+      }
+      if (tokenStatus !== 'ACTIVE') {
+        return { success: false, error: 'This token is not available to claim.' }
+      }
+
+      if (!requireActiveTether({ status: tokenStatus, nfc_uid: (token as { nfc_uid?: string | null }).nfc_uid, asset_uuid: (token as { asset_uuid?: string | null }).asset_uuid })) {
+        return { success: false, error: 'This token is not properly configured for claim.' }
+      }
+
+      // Optional: require valid SUN signature when enforced (NFC tap physical proof)
+      const requireSun = process.env.REQUIRE_SUN_SIGNATURE === 'true'
+      const signature = typeof input.signature === 'string' ? input.signature.trim() : ''
+      if (requireSun && !signature) {
+        return { success: false, error: 'Valid tap signature is required to claim.' }
       }
 
       // Block redemption when token has no value (balance $0 or null)
@@ -292,13 +326,7 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       })
 
       if (insertErr) {
-        // Unique constraint safety net: if a response already exists for this token, treat as already claimed.
         if ((insertErr as { code?: string } | null)?.code === '23505') {
-          // Best-effort: ensure token status converges to "found" even if a prior claim failed mid-flight.
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (supabase as any).from('tokens').update({ status: 'found', redeemed_at: new Date().toISOString() }).eq('id', tokenId)
-          } catch {}
           return { success: false, error: 'This token has already been claimed.' }
         }
         console.error('[submitClaim] ❌ Response insert error:', {
@@ -312,7 +340,7 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
         return { success: false, error: 'Could not save response.' }
       }
 
-      const tokenUpdate: Record<string, unknown> = { status: 'found', redeemed_at: new Date().toISOString() }
+      const tokenUpdate: Record<string, unknown> = { status: 'PENDING_SETTLEMENT' }
       if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
         tokenUpdate.lat = lat
         tokenUpdate.lng = lng
@@ -326,13 +354,15 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
 
       if (updateErr) {
         console.error('[submitClaim] token update error:', updateErr.message)
-        // Best-effort: retry with minimal payload (status + redeemed_at) to reduce inconsistent states.
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (supabase as any).from('tokens').update({ status: 'found', redeemed_at: new Date().toISOString() }).eq('id', tokenId)
-        } catch {}
-        // Non-fatal: response was saved; avoid prompting a retry that would create duplicates.
-        return { success: true }
+        return { success: false, error: 'Could not lock token for payout.' }
+      }
+
+      const payoutResult = await executePayout({
+        tokenId,
+        venmoUsername: String(venmoUsername ?? '').trim() || undefined,
+      })
+      if (!payoutResult.success) {
+        return { success: false, error: payoutResult.error ?? 'Payout failed.' }
       }
 
       return { success: true }

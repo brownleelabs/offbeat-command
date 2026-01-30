@@ -12,6 +12,8 @@
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.91.1",
     "clsx": "^2.1.1",
+    "graphql": "^16.12.0",
+    "graphql-request": "^7.4.0",
     "lucide-react": "^0.468.0",
     "mapbox-gl": "^3.18.1",
     "next": "16.1.4",

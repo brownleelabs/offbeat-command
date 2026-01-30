@@ -51,13 +51,15 @@ function getCurrentPositionAsync(
 interface ClaimFormProps {
   tokenId: string;
   campaign: Campaign | null;
+  /** NFC SUN message from URL (optional; for ACTIVE -> PENDING_SETTLEMENT verification). */
+  signature?: string | null;
   /** Configurable note shown below Venmo line on success (Settings). */
   redemptionSuccessNote?: string | null;
   /** Optional URL shown as "Visit [link]" below note (Settings). */
   redemptionSuccessLink?: string | null;
 }
 
-export default function ClaimForm({ tokenId, campaign, redemptionSuccessNote, redemptionSuccessLink }: ClaimFormProps) {
+export default function ClaimForm({ tokenId, campaign, signature, redemptionSuccessNote, redemptionSuccessLink }: ClaimFormProps) {
   const [status, setStatus] = useState<"form" | "submitting" | "success" | "error">("form");
   const [submitPhase, setSubmitPhase] = useState<SubmitPhase>("saving");
   const [errorMsg, setErrorMsg] = useState("");
@@ -112,6 +114,7 @@ export default function ClaimForm({ tokenId, campaign, redemptionSuccessNote, re
         lat: coords?.lat ?? null,
         lng: coords?.lng ?? null,
         claimMetadata,
+        signature: signature ?? null,
       });
 
       if (result.success) {
@@ -287,7 +290,7 @@ export default function ClaimForm({ tokenId, campaign, redemptionSuccessNote, re
           {status === "submitting"
             ? submitPhase === "location"
               ? "Getting your location..."
-              : "Submitting..."
+              : "Processing Reward..."
             : "Submit & claim $25.00"}
         </button>
       </form>

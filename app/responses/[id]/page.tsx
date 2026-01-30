@@ -147,9 +147,9 @@ export default function ResponseDetailPage() {
                 Token:{" "}
                 {tokenIdSafe ? (
                   <Link
-                    href={`/claim/${response.token_id}`}
+                    href={`/fleet/${response.token_id}`}
                     className="font-mono text-primary hover:underline"
-                    title="Claim page for this token"
+                    title="Asset details for this token"
                   >
                     {response.token_id.slice(0, 8)}…
                   </Link>

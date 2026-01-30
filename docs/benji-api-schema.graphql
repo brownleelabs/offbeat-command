@@ -1,0 +1,1677 @@
+directive @oneOf on INPUT_OBJECT
+
+"""Custom scalar for handling BigDecimal values"""
+scalar BigDecimal
+
+enum BlockchainOperationStatus {
+  """
+  The operation has not yet been sent to the chain for completion pending internal approvals from other users
+  """
+  APPROVAL_NEEDED
+
+  """The transaction is still in progress"""
+  PENDING
+
+  """The transaction completed successfully"""
+  COMPLETE
+
+  """
+  The transaction failed. A cause will be available in a corresponding error property on the result
+  """
+  FAILED
+
+  """The transaction failed to complete due to a timeout during submission"""
+  TIMED_OUT
+
+  """The transaction has met the requirement to be ready for approval"""
+  READY_TO_SUBMIT
+}
+
+"""
+A user defined key value pair. Lists of DataTags can be attached to objects in the api, (Wallets, FundingSources, etc)
+for reference by the client system.
+
+An example usage would be to record an internal reference number to another
+system that exists within the client
+organization, e.g. Key=FictionalCo-SysId, Value = 82726213
+
+A maximum of 5 tags can be added per component.
+"""
+type DataTag {
+  """The key for this tag, must be unique across the list for the component"""
+  dataTagKey: String!
+
+  """The non-null String value for this tag"""
+  dataTagValue: String!
+}
+
+"""
+A user defined key value pair. Lists of DataTags can be attached to other types for reference by the client system
+"""
+input DataTagInput {
+  """
+  The key for this tag, must be unique across the list for the component, a max length of 50
+  """
+  dataTagKey: String!
+
+  """The non-null String value for this tag. Up to a max of 255 characters"""
+  dataTagValue: String!
+}
+
+"""An RFC-3339 compliant Full Date Scalar"""
+scalar Date
+
+"""A slightly refined version of RFC-3339 compliant DateTime Scalar"""
+scalar DateTime
+
+"""
+A deposit represents money from outside the blockchain world, being taken in and used to create a corresponding token
+creation for that wallet.
+"""
+type Deposit {
+  """The id of this deposit"""
+  depositId: ID!
+
+  """The wallet housing this deposit"""
+  wallet: DepositWallet!
+
+  """The product involved in this deposit"""
+  product: DepositProduct!
+
+  """
+   The amount of currency deposited. Currently limited to 2 digits of precision.
+  Mutually exclusive with `quantity` 
+  """
+  value: BigDecimal!
+
+  """
+   The number of shares (quantity) purchased. High precision supported.
+  Mutually exclusive with `value` 
+  """
+  quantity: BigDecimal
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""The result of approving a deposit"""
+type DepositApproveResult {
+  """ The id of the deposit that was approved """
+  depositId: ID!
+
+  """ The current status of the deposit """
+  blockchainStatus: BlockchainOperationStatus!
+
+  """
+   If the creation request was instructed to build the signing package, then this will be populated with the
+  information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+}
+
+"""The result of creating a new deposit"""
+type DepositCreateResult {
+  """ The id of the new deposit that was created """
+  depositId: ID!
+
+  """ The current status of the deposit """
+  blockchainStatus: BlockchainOperationStatus!
+
+  """
+   If the creation request was instructed to build the signing package, then this will be populated with the
+  information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+}
+
+"""
+A deposit represents money from outside the blockchain world, being taken in and used to create a corresponding token
+creation in that wallet.
+"""
+type DepositListElement {
+  """The id of this deposit"""
+  depositId: ID!
+
+  """The wallet housing this deposit"""
+  wallet: DepositWallet!
+
+  """The product used in this deposit"""
+  product: DepositProduct!
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+
+  """
+   The amount of currency deposited. Currently limited to 2 digits of precision.
+  Mutually exclusive with `quantity` 
+  """
+  value: BigDecimal
+
+  """
+   The number of shares (quantity) purchased. High precision supported.
+  Mutually exclusive with `value` 
+  """
+  quantity: BigDecimal
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""A product as it is represented in the context of being deposited"""
+type DepositProduct {
+  """The id of this product"""
+  productId: ID!
+
+  """ The long name of the product """
+  productName: String!
+}
+
+"""The result of rejecting a deposit"""
+type DepositRejectResult {
+  """ The id of the new deposit that was rejected """
+  depositId: ID!
+}
+
+"""The result of submitting a deposit"""
+type DepositSubmitResult {
+  """ The ID of the deposit to approve """
+  depositId: ID!
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""A wallet as it is represented in the context of containing a deposit"""
+type DepositWallet {
+  """The id of this wallet"""
+  walletId: ID!
+
+  """The user defined name of this wallet"""
+  walletName: String
+
+  """The public address of this wallet. Analogous to its public key"""
+  walletAddress: String!
+
+  """The network to which this wallet belongs"""
+  network: WalletNetwork!
+
+  """
+  The institution entity that owns this wallet. Wallets held by retail investors will have a null institution entity.
+  """
+  institutionEntity: WalletInstitutionEntity
+}
+
+"""A paged list of deposits meeting the search criteria requested"""
+type DepositsList implements ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+
+  """ The list of elements for the current page """
+  elements: [DepositListElement!]!
+}
+
+"""
+This construct is used when an institutional deposit is being approved.
+"""
+input InstitutionDepositApproveInput {
+  """ The ID of the deposit to approve """
+  depositId: ID!
+
+  """
+   If true, the result of the approval will contain a signing payload that can be
+  used to generate an intent signature for the submission request. 
+  """
+  buildSigningPackage: Boolean!
+
+  """
+   The user identifier who is creating the deposit. When this is supplied by a systematic client (e.g. a user
+  of the API, not a UI, this is carried over from the internal controls within that system. One user can only
+  count for one approval, and the user who created the deposit can not approve their own deposit 
+  """
+  userId: String!
+}
+
+"""
+Instructions for creating a deposit, which will take in currency and deposit the equivalent amount of shares into the wallet.
+Depending on the method used to transfer in the money, one of the paymentMethod... arguments need to be supplied. At
+least one payment method has to be included.
+"""
+input InstitutionDepositCreateInput {
+  """ Indicates which wallet this deposit will be created on """
+  walletId: ID!
+
+  """ Indicates which product will be bought with this deposit """
+  productId: ID!
+
+  """
+   The amount of currency to be deposited. Currently limited to 2 digits of precision.
+  Mutually exclusive with `quantity` 
+  """
+  value: BigDecimal!
+
+  """ Populate this argument when the deposit will be paid with a wire transfer 
+  """
+  paymentMethodWire: WirePaymentInput
+
+  """ Populate this argument when the deposit will be paid with a SWIFT transfer 
+  """
+  paymentMethodSwift: SwiftPaymentInput
+
+  """
+   If true, the result of the approval will contain a signing payload that can be
+  used to generate an intent signature for the submission request. 
+  """
+  buildSigningPackage: Boolean!
+
+  """
+   The user identifier who is creating the deposit. When this is supplied by a systematic client (e.g. a user
+  of the API, not a UI, this is carried over from the internal controls within that system 
+  """
+  userId: String!
+}
+
+"""
+This construct is used when an institutional deposit is being submitted.
+"""
+input InstitutionDepositSubmitInput {
+  """ The ID of the deposit to approve """
+  depositId: ID!
+
+  """ The signature of the contents of the transaction """
+  intentSignature: String!
+}
+
+"""
+An institution entity is the corporate (or similar) construct that is the legal holder of wallets. An institution,
+which doesn't directly hold assets, is a housing for a set of institution entities.
+"""
+type InstitutionEntity {
+  """The id of the institution entity"""
+  institutionEntityId: ID!
+
+  """The institution entity's name"""
+  institutionEntityName: String!
+
+  """When this was created"""
+  created: DateTime!
+
+  """When this was last updated"""
+  updated: DateTime!
+
+  """ The established payment instructions for this entity """
+  paymentInstructions: [InstitutionEntityPaymentInstruction!]!
+}
+
+"""
+A paged list of institution entities meeting the search criteria requested
+"""
+type InstitutionEntityList implements ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+
+  """ The list of elements for the current page """
+  elements: [InstitutionEntityListElement!]!
+}
+
+"""
+An institution entity is the corporate (or similar) construct that is the legal holder of wallets.
+"""
+type InstitutionEntityListElement {
+  """The id of the institution entity"""
+  institutionEntityId: ID!
+
+  """The institution entity's name"""
+  institutionEntityName: String!
+}
+
+"""
+An established and pre-cleared payment method for money movement, e.g. FED Wire or Swift Instructions
+"""
+type InstitutionEntityPaymentInstruction {
+  institutionEntityPaymentInstructionId: ID!
+  paymentInstructionName: String!
+  paymentMethodType: PaymentMethodType!
+  bankName: String
+}
+
+input InstitutionSigningKeySubmitInput {
+  """ The ID of the signing key to submit """
+  signingKeyId: ID!
+
+  """ The signature of the contents of the transaction """
+  intentSignature: String!
+}
+
+"""
+Payload of instructions for approving a transfer for an institutional client
+"""
+input InstitutionTransferApproveInput {
+  """ The ID of the transfer to approve """
+  transferId: ID!
+
+  """
+   If true, the result of the approval will contain a signing payload that can be
+  used to generate an intent signature for the submission request. 
+  """
+  buildSigningPackage: Boolean!
+
+  """
+   The user identifier who is creating the transfer. When this is supplied by a systematic client (e.g. a user
+  of the API, not a UI, this is carried over from the internal controls within that system. One user can only
+  count for one approval, and the user who created the transfer can not approve their own transfer 
+  """
+  userId: String!
+}
+
+"""
+Payload of instructions for creating a transfer for an institutional client
+"""
+input InstitutionTransferCreateInput {
+  """ The ID of the wallet from which to transfer """
+  sourceWalletId: ID!
+
+  """ The ID of the product to transfer """
+  productId: ID!
+
+  """ The blockchain address of the recipient wallet """
+  recipientWalletAddress: String!
+
+  """The quantity of shares being transferred"""
+  quantity: BigDecimal
+
+  """
+   If true, the result of the approval will contain a signing payload that can be
+  used to generate an intent signature for the submission request. 
+  """
+  buildSigningPackage: Boolean!
+
+  """
+   The user identifier who is creating the transfer. When this is supplied by a systematic client (e.g. a user
+  of the API, not a UI, this is carried over from the internal controls within that system. One user can only
+  count for one approval, and the user who created the transfer can not approve their own transfer 
+  """
+  userId: String!
+
+  """
+   Set to true when the transfer should take place immediately upon submission. Otherwise the transfer will take
+  effect at the market close
+  """
+  instant: Boolean!
+}
+
+"""
+This construct is used when an institutional transfer is being submitted.
+"""
+input InstitutionTransferSubmitInput {
+  """ The ID of the transfer to approve """
+  transferId: ID!
+
+  """ The signature of the contents of the transaction """
+  intentSignature: String!
+}
+
+"""The payload for an institutional wallet creation"""
+input InstitutionWalletCreateInput {
+  """ The network on which this wallet should be created """
+  networkId: String!
+
+  """ The initial product to be configured on this wallet """
+  productId: ID!
+
+  """ The user defined name of this wallet """
+  walletName: String!
+
+  """
+  If included, this operation will perform all the wallet creation operations but, instead of creating a new address,
+  will instead register the provided address in it's place.
+  """
+  walletAddress: String
+
+  """ The institution entity that will own this wallet """
+  institutionEntityId: ID!
+
+  """ The first signing key to be created on this wallet. All subsequent transactions on the wallets will require intent signing 
+  """
+  signingKey: SigningKeyInput!
+}
+
+"""The payload for an institution updating a wallet"""
+input InstitutionWalletUpdateInput {
+  """ The ID of the wallet to update """
+  walletId: ID!
+
+  """ The caller-defined name of the wallet """
+  walletName: String
+}
+
+"""
+This construct is used when an institutional withdrawal is being approved.
+"""
+input InstitutionWithdrawalApproveInput {
+  """ The ID of the withdrawal to approve """
+  withdrawalId: ID!
+
+  """
+   If true, the result of the approval will contain a signing payload that can be
+  used to generate an intent signature for the submission request. 
+  """
+  buildSigningPackage: Boolean!
+
+  """
+   The user identifier who is creating the withdrawal. When this is supplied by a systematic client (e.g. a user
+  of the API, not a UI, this is carried over from the internal controls within that system. One user can only
+  count for one approval, and the user who created the withdrawal can not approve their own withdrawal 
+  """
+  userId: String!
+}
+
+"""
+Instructions for creating a withdrawal, which will take shares from the wallet and send resulting currency to the chosen
+paymentInstruction.
+"""
+input InstitutionWithdrawalCreateInput {
+  """ Indicates which wallet this withdrawal will be created on """
+  walletId: ID!
+
+  """ Indicates which product will be sold with this withdrawal """
+  productId: ID!
+
+  """
+   The amount of currency to be withdrawn. Currently limited to 2 digits of precision.
+  Mutually exclusive with `quantity` 
+  """
+  value: BigDecimal
+
+  """
+   The number of shares (quantity) to be withdrawn. High precision supported.
+  Mutually exclusive with `value` 
+  """
+  quantity: BigDecimal
+
+  """ Indicates which of the entity's established payment instructions should be used to send the proceeds of the withdrawal to 
+  """
+  paymentInstructionId: ID!
+
+  """
+   If true, the result of the approval will contain a signing payload that can be
+  used to generate an intent signature for the submission request. 
+  """
+  buildSigningPackage: Boolean!
+
+  """
+   The user identifier who is creating the withdrawal. When this is supplied by a systematic client (e.g. a user
+  of the API, not a UI, this is carried over from the internal controls within that system 
+  """
+  userId: String!
+}
+
+"""
+This construct is used when an institutional withdrawal is being submitted.
+"""
+input InstitutionWithdrawalSubmitInput {
+  """ The ID of the withdrawal to approve """
+  withdrawalId: ID!
+
+  """ The signature of the contents of the transaction """
+  intentSignature: String!
+}
+
+"""
+Contains the information needed to validate a transaction for intent signing. The type indicates how the payload can be
+analyzed and the payload itself is what to cryptographically sign.
+"""
+type IntentSigningPackage {
+  """ The type of the payload. This will determine how the payload can be validated before signing and will vary by blockchain 
+  """
+  payloadType: String!
+
+  """ The payload of the request to validate and sign """
+  payload: String!
+}
+
+type Mutation {
+  """
+  Creates a new deposit operation from a given funding source into a wallet / product.
+  Deposits require a number of approvals specified at the wallet level. If there are no approvals required for the
+  wallet involved, set buildSigningPackage to true, and the result will contain the necessary information to build
+  a signed submission request.
+  
+  **Errors**
+  
+  `WALLET_NOT_FOUND` - When the wallet couldn't be found.
+  `PRODUCT_NOT_FOUND` - When the product isn't found / available in the source wallet.
+  `INVALID_TRANSACTION_STATE` - The transaction is not in the correct state to be approved. Possibly already submitted.
+  `ONE_AMOUNT_ALLOWED` - value and quantity are mutually exclusive.
+  `PAYMENT_METHOD_REQUIRED` - A payment method must be specified.
+  `SINGLE_PAYMENT_METHOD_REQUIRED` - Only specify a single payment method for this deposit.
+  `SWIFT_REFERENCE_NUMBER_IN_USE` - When an outstanding deposit already exists with the given swift reference number
+  """
+  depositCreate(
+    """ The set of inputs to create a deposit for an institutional use-case """
+    institutionInput: InstitutionDepositCreateInput
+  ): DepositCreateResult!
+
+  """
+  Approves a pending deposit. Depending on the number of approvals required (specified at the wallet level) this
+  approval could make the deposit ready to succeed. If this is the last approval required, set buildSigningPackage
+  to true and the result will include the signing payload ready for the submission request.
+  
+  **Errors**
+  
+  `INVALID_TRANSACTION_STATE` - When the transaction is not in the proper state to be approved. Possibly already submitted.
+  `TRANSFER_RESTRICTED` - When this wallet has a restriction preventing outbound transfers.
+  """
+  depositApprove(
+    """ The payload for an institutional approval """
+    institutionApproval: InstitutionDepositApproveInput
+  ): DepositApproveResult!
+
+  """
+  Submits the signed transaction to the blockchain for fulfillment. The transaction must have met the approval
+  threshold for the wallet, and the signature must be valid for the transaction. This is an asynchronous operation.
+  The status of the transaction can be checked by querying the deposit.
+  
+  **Errors**
+  
+  `INVALID_TRANSACTION_STATE` - When the transaction is not in the proper state to be approved. Possibly already submitted.
+  `APPROVAL_THRESHOLD_NOT_MET` - This transaction has not met the necessary number of approvals
+  `INTENT_SIGNING_FAILURE` - The intent signature could not be validated.
+  """
+  depositSubmit(institutionSubmit: InstitutionDepositSubmitInput): DepositSubmitResult!
+
+  """
+  Creates a new wallet on the specified network authorized for the specified product.
+  
+  **Errors**
+  
+  `INST_ENTITY_NOT_FOUND` - The entity supplied could not be found
+  
+  `PRODUCT_NOT_ON_NETWORK` - The product was found, but it is not operational on the given network
+  
+  `PRODUCT_NOT_ONBOARDED` - This institution entity hasn't been onboarded for the indicated product.
+  
+  `PRODUCT_NOT_FOUND` - The given product could not be found
+  
+  `INVALID_SIGNING_KEY` - The supplied public key was not valid
+  """
+  walletCreate(institutionInput: InstitutionWalletCreateInput!): WalletCreateResult!
+
+  """
+  Update an existing wallet's user-controllable properties
+  
+  **Errors**
+  
+  `WALLET_NOT_FOUND` - When the given wallet is not found
+  """
+  walletUpdate(institutionInput: InstitutionWalletUpdateInput!): WalletUpdateResult!
+
+  """
+  Creates a new signing key for a given wallet and returns the intent signing package to be signed and submitted
+  to finalize this key for us.
+  
+  **Errors**
+  
+  `WALLET_NOT_FOUND` - When the given wallet is not found
+  
+  `INVALID_SIGNING_KEY` - The supplied public key was not valid
+  """
+  walletSigningKeyCreate(input: WalletSigningKeyCreateInput!): WalletSigningKeyCreateResult!
+
+  """
+  Finalizes a signing key and adds it as a valid key for future intent signing operations.
+  
+  **Errors**
+  
+  `INVALID_TRANSACTION_STATE` - When the given wallet is not found
+  
+  `SIGNING_KEY_NOT_FOUND`  - They key used to sign the intent package could not be found for this wallet
+  
+  `INTENT_SIGNING_FAILURE` - The provided intent-signature could not be validated
+  """
+  walletSigningKeySubmit(institutionSubmit: InstitutionSigningKeySubmitInput): WalletSigningKeySubmitResult!
+
+  """
+  Creates a transfer of a product from a wallet you own to a recipient wallet. The recipient wallet must be an
+  authorized holder of the product token being transferred.
+  
+  **Errors**
+  
+  `WALLET_NOT_FOUND` - When the source wallet couldn't be found.
+  `PRODUCT_NOT_FOUND` - When the product isn't found / available in the source wallet to be transferred.
+  `RECIPIENT_WALLET_NOT_FOUND` - When the recipient wallet address specified on the instructions could not be found.
+  `TRANSFER_RESTRICTED` - When this wallet has a restriction preventing outbound transfers.
+  `INVALID_QUANTITY` - When the quantity specified isn't valid for the source wallet to transfer out.
+  `INVALID_TRANSACTION_STATE` - The transaction is not in the correct state to be approved. Possibly already submitted.
+  """
+  transferCreate(
+    """ The payload to be used for an institutional transfer"""
+    institutionInput: InstitutionTransferCreateInput
+  ): TransferCreateResult!
+
+  """
+  Approves a transfer.
+  
+  **Errors**
+  
+  `INVALID_TRANSACTION_STATE` - When the transaction is not in the proper state to be approved. Possibly already submitted.
+  `TRANSFER_RESTRICTED` - When this wallet has a restriction preventing outbound transfers.
+  """
+  transferApprove(institutionApproval: InstitutionTransferApproveInput): TransferApproveResult!
+
+  """
+  Submits the signed transaction to the blockchain for fulfillment. The transaction must have met the approval
+  threshold for the wallet, and the signature must be valid for the transaction. This is an asynchronous operation.
+  The status of the transaction can be checked by querying the transfer.
+  
+  `INVALID_TRANSACTION_STATE` - When the transaction is not in the proper state to be approved. Possibly already submitted.
+  `APPROVAL_THRESHOLD_NOT_MET` - This transaction has not met the necessary number of approvals
+  `INTENT_SIGNING_FAILURE` - The intent signature could not be validated.
+  """
+  transferSubmit(institutionSubmit: InstitutionTransferSubmitInput): TransferSubmitResult!
+
+  """
+  Creates a new withdrawal operation from a given funding source into a wallet / product. This is an asynchronous
+  operation and the result is the pending ID of the new withdrawal to be checked with status calls.
+  
+  `WALLET_NOT_FOUND` - When the wallet couldn't be found.
+  `PRODUCT_NOT_FOUND` - When the product isn't found / available in the source wallet.
+  `INVALID_TRANSACTION_STATE` - The transaction is not in the correct state to be approved. Possibly already submitted.
+  `PAYMENT_METHOD_NOT_FOUND` - The payment ID supplied could not be found
+  """
+  withdrawalCreate(
+    """ The set of inputs to create a withdrawal for an institutional use-case 
+    """
+    institutionInput: InstitutionWithdrawalCreateInput
+  ): WithdrawalCreateResult!
+
+  """
+  Approves a pending withdrawal. Depending on the number of approvals required (specified at the wallet level) this
+  approval could make the withdrawal ready to succeed. If this is the last approval required, set buildSigningPackage
+  to true and the result will include the signing payload ready for the submission request.
+  
+  **Errors**
+  
+  `INVALID_TRANSACTION_STATE` - When the transaction is not in the proper state to be approved. Possibly already submitted.
+  `TRANSFER_RESTRICTED` - When this wallet has a restriction preventing outbound transfers.
+  """
+  withdrawalApprove(
+    """ Approves an institutional withdrawal """
+    institutionApproval: InstitutionWithdrawalApproveInput
+  ): WithdrawalApproveResult!
+
+  """
+  Submits the signed transaction to the blockchain for fulfillment. The transaction must have met the approval
+  threshold for the wallet, and the signature must be valid for the transaction. This is an asynchronous operation.
+  The status of the transaction can be checked by querying the withdrawal.
+  
+  **Errors**
+  
+  `INVALID_TRANSACTION_STATE` - When the transaction is not in the proper state to be approved. Possibly already submitted.
+  `APPROVAL_THRESHOLD_NOT_MET` - This transaction has not met the necessary number of approvals
+  `INTENT_SIGNING_FAILURE` - The intent signature could not be validated.
+  """
+  withdrawalSubmit(institutionSubmit: InstitutionWithdrawalSubmitInput): WithdrawalSubmitResult!
+}
+
+"""
+A network represents a blockchain network on which transactions are recorded for tokenized assets
+"""
+type Network {
+  """ The internal ID of the network. This ID will be used to reference the network in other requests 
+  """
+  networkId: ID!
+
+  """ The name of the network """
+  networkName: String!
+}
+
+"""
+A network represents a blockchain network on which transactions are recorded for tokenized assets
+"""
+type NetworkListElement {
+  """ The internal ID of the network. This ID will be used to reference the network in other requests 
+  """
+  networkId: ID!
+
+  """ The name of the network """
+  networkName: String!
+}
+
+"""A paged list of networks meeting the search criteria requested"""
+type NetworksList implements ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+
+  """ The list of elements for the current page """
+  elements: [NetworkListElement!]!
+}
+
+"""An Int scalar that must be greater than or equal to zero"""
+scalar NonNegativeInt
+
+"""
+Provides instructions as to how to divide a dataset into pages and which subset of data to return.
+"""
+input PagingInstructions {
+  """Page to retrieve, (indexed from 0)"""
+  page: NonNegativeInt
+
+  """The desired page size. (May be overridden by the backend)"""
+  pageSize: PositiveInt
+
+  """
+  The field to use to sort the results. Available options will be described in the query documentation.
+  """
+  sortField: String
+
+  """True when sorted ascending, false to reverse"""
+  ascending: Boolean
+}
+
+enum PaymentMethodType {
+  FED_WIRE
+  ACH
+  SWIFT
+}
+
+"""An Int scalar that must be a positive value"""
+scalar PositiveInt
+
+"""
+A product represents an investment vehicle. Products are available on varying networks as tokens for each product
+network combination.
+"""
+type ProductListElement {
+  """The id of this product"""
+  productId: ID!
+
+  """ The long name of the product """
+  productName: String!
+
+  """ The time in 24 hour, HH:mm format. e.g. 16:30 """
+  orderCloseTime: String!
+
+  """ The time zone that this product close is calculated in """
+  orderCloseTz: String!
+
+  """ When this product was created """
+  created: DateTime!
+
+  """ The networks that this product is available on """
+  networks: [ProductNetwork!]!
+
+  """ The set of payment methods that are allowed for use on this product """
+  paymentMethods: [ProductPaymentMethod!]!
+}
+
+"""
+A network as it relates to a specific product. The combination of a product and network is manifested as a token.
+"""
+type ProductNetwork {
+  """ The id of this network """
+  networkId: String!
+
+  """ The long name of the network """
+  networkName: String!
+
+  """ Is this product tradable on this network """
+  isTradable: Boolean!
+}
+
+type ProductPaymentMethod {
+  paymentMethodId: ID!
+  paymentMethodName: String!
+  instructionText: String
+}
+
+"""A paged list of products meeting the search criteria requested"""
+type ProductsList implements ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+
+  """ The list of elements for the current page """
+  elements: [ProductListElement!]!
+}
+
+type Query {
+  """
+  Retrieves a list of deposits that this user has access to and filtered by the given criteria.
+  
+  **Sortable Fields**
+  `created` (default)
+  """
+  deposits(
+    """ Filter deposits for a given wallet """
+    walletId: ID
+
+    """ Filter deposits for a given institution entity """
+    institutionEntityId: ID
+
+    """Paging instructions for the resulting list"""
+    paging: PagingInstructions
+  ): DepositsList!
+
+  """Returns a single deposit"""
+  deposit(
+    """ The ID of the deposit to retrieve """
+    depositId: ID!
+  ): Deposit!
+
+  """
+  Retrieves a wallet with the given ID limited by the wallets to which this user has access to.
+  """
+  wallet(
+    """ The id of the wallet to retrieve """
+    walletId: ID!
+  ): Wallet!
+
+  """
+  Retrieves set of wallets that this user has access to.
+  
+  If the calling user has no wallets, then an empty list will be returned.
+  
+  **Sortable Fields**
+  `created` (default), "walletName"
+  """
+  wallets(
+    """Paging instructions for the resulting list"""
+    paging: PagingInstructions
+  ): WalletsList!
+
+  """
+  Fetches a list of transfers that meet the given criteria.
+  
+  **Sortable Fields**
+  `created` (default)
+  """
+  transfers(
+    """Filter by the wallet that this transfer belongs to"""
+    sourceWalletId: ID
+
+    """Filter by the the wallet address of the recipient of this transfer"""
+    recipientAddress: String
+
+    """Paging instructions for the resulting list"""
+    paging: PagingInstructions
+  ): TransfersList!
+
+  """Returns a transfer based on the given ID"""
+  transfer(
+    """ The transfer ID to retrieve """
+    transferId: ID
+  ): Transfer!
+
+  """
+  Returns a list of products that meet the given criteria
+  
+  **Sortable Fields**
+  `productName` (default), `created`
+  """
+  products(
+    """Paging instructions for the resulting list"""
+    paging: PagingInstructions
+  ): ProductsList!
+
+  """
+  Retrieves a list of withdrawals that this user has access to and filtered by the given criteria.
+  
+  **Sortable Fields**
+  `created` (default)
+  """
+  withdrawals(
+    """ Filter withdrawals for a given wallet """
+    walletId: ID
+
+    """ Filter withdrawals for a given institution entity """
+    institutionEntityId: ID
+
+    """Paging instructions for the resulting list"""
+    paging: PagingInstructions
+  ): WithdrawalsList!
+
+  """Returns a single withdrawal"""
+  withdrawal(
+    """ The ID of the withdrawal to retrieve """
+    withdrawalId: ID!
+  ): Withdrawal!
+
+  """
+  Retrieves a list of institution entities
+  
+  **Sortable Fields**
+  `created` (Default), `institutionEntityName`
+  """
+  institutionEntities(
+    """Paging instructions for the resulting list"""
+    paging: PagingInstructions
+  ): InstitutionEntityList!
+
+  """Retrieves a specific institution entity based on the ID provided"""
+  institutionEntity(
+    """The ID of the institution entity to retrieve"""
+    institutionEntityId: ID!
+  ): InstitutionEntity!
+
+  """
+  Returns a list of networks that meet the given criteria
+  
+  **Sortable Fields**
+  `networkName` (default), `networkId`
+  """
+  networks(
+    """Paging instructions for the resulting list"""
+    paging: PagingInstructions
+  ): NetworksList!
+
+  """Retrieves a specific network"""
+  network(
+    """ The id of the network to retrieve """
+    networkId: ID!
+  ): Network!
+}
+
+"""
+Provides a prescriptive definition of the properties for a paged list response. An elements property containing the list
+of the appropriate type for the result will be included. Graphql doesn't support generics in a way that can describe
+that directly in the schema without being more difficult to use.
+"""
+interface ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+}
+
+type SigningKey {
+  signingKeyId: ID!
+  signingKeyName: String!
+  signingKey: String!
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+""""""
+input SigningKeyInput {
+  signingKeyScheme: SigningKeyScheme!
+  signingKeyName: String!
+  signingKey: String!
+}
+
+enum SigningKeyScheme {
+  SUMMARY_ED25519
+}
+
+"""
+This construct is used when moving money (deposits/withdrawal currency) using a swift transfer method
+"""
+input SwiftPaymentInput {
+  """
+   The reference number that will be used to match the currency transfer.
+  This must be a unique value for not-yet-paid transactions. If you have a deposit that has not yet received cash, then
+  that reference number can not be re-used until it is settled.
+  """
+  swiftRefNumber: String!
+}
+
+"""
+A transfer represents movement of a product's tokens from one of the caller's wallets to a recipient wallet address.
+That recipient wallet address has to be onboarded to allow the token to be transferred into it.
+"""
+type Transfer {
+  """The id of this transfer"""
+  transferId: ID!
+
+  """The wallet from which the product is being transferred"""
+  sourceWallet: TransferWallet!
+
+  """The product being transferred"""
+  product: TransferProduct!
+
+  """The quantity of shares being transferred"""
+  quantity: BigDecimal!
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+
+  """The address of the recipient wallet"""
+  recipientWalletAddress: String!
+
+  """The status of this transfer on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""The result of approving a transfer"""
+type TransferApproveResult {
+  """ The ID of the approved transfer """
+  transferId: ID!
+
+  """ The current status of the transfer """
+  status: BlockchainOperationStatus!
+
+  """
+   If the creation request was instructed to build the signing package, then this will be populated with the
+  information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+}
+
+"""The result of creating a transfer"""
+type TransferCreateResult {
+  """ The ID of the newly created transfer """
+  transferId: ID!
+
+  """
+   If the creation request was instructed to build the signing package, then this will be populated with the
+  information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+}
+
+"""
+A transfer represents movement of a product's tokens from one of the caller's wallets to a recipient wallet address.
+That recipient wallet address has to be onboarded to allow the token to be transferred into it.
+"""
+type TransferListElement {
+  """The id of this transfer"""
+  transferId: ID!
+
+  """The wallet from which the product is being transferred"""
+  sourceWallet: TransferWallet!
+
+  """The product being transferred"""
+  product: TransferProduct!
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+
+  """The quantity of shares being transferred"""
+  quantity: BigDecimal!
+
+  """The address of the recipient wallet"""
+  recipientWalletAddress: String!
+
+  """The status of this transfer on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""A product in the context of being a part of a transfer transaction"""
+type TransferProduct {
+  """The id of this product"""
+  productId: ID!
+
+  """ The long name of the product """
+  productName: String!
+}
+
+"""The result of submitting a transfer"""
+type TransferSubmitResult {
+  """ The ID of the transfer to approve """
+  transferId: ID!
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""A wallet in the context of being a part of a transfer transaction"""
+type TransferWallet {
+  """The id of this wallet"""
+  walletId: ID!
+
+  """The user defined name of this wallet"""
+  walletName: String
+
+  """The public address of this wallet. Analogous to its public key"""
+  walletAddress: String!
+
+  """The network to which this wallet belongs"""
+  network: WalletNetwork!
+
+  """
+  The institution entity that owns this wallet. Wallets held by retail investors will have a null institution entity.
+  """
+  institutionEntity: WalletInstitutionEntity
+}
+
+"""A paged list of transfers meeting the search criteria requested"""
+type TransfersList implements ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+
+  """ The list of elements for the current page """
+  elements: [TransferListElement!]!
+}
+
+""""""
+scalar Upload
+
+"""
+A wallet represents a blockchain address. The wallet itself is not an asset, but the holdings it contains represent
+individual assets that are held within the wallet.
+"""
+type Wallet {
+  """The id of this wallet"""
+  walletId: ID!
+
+  """The user defined name of this wallet"""
+  walletName: String
+
+  """The public address of this wallet. Analogous to its public key"""
+  walletAddress: String!
+
+  """The network to which this wallet belongs"""
+  network: WalletNetwork!
+
+  """When this was created"""
+  created: Date!
+
+  """When this was last updated"""
+  updated: Date!
+
+  """Allow Transfers"""
+  transferEligible: Boolean!
+
+  """
+  The institution entity that owns this wallet. Wallets held by retail investors will have a null institution entity.
+  """
+  institutionEntity: WalletInstitutionEntity
+
+  """The set of signing keys for this wallet """
+  signingKeys: [SigningKey!]!
+
+  """The set of holdings within this wallet"""
+  holdings: [WalletHolding!]!
+}
+
+"""The result of creating a new wallet"""
+type WalletCreateResult {
+  """ The ID of the newly created wallet """
+  walletId: ID!
+
+  """ The blockchain address of the newly created wallet """
+  walletAddress: String!
+}
+
+"""The result of creating a new wallet"""
+type WalletHolding {
+  """ The ID of the newly created wallet """
+  productId: ID!
+
+  """ The blockchain address of the newly created wallet """
+  productName: String!
+
+  """ Balance as of last market close """
+  currentBalance: BigDecimal!
+
+  """ Amount held in escrow """
+  escrowBalance: BigDecimal!
+
+  """ Amount of pending transactions that have not yet settled """
+  pendingBalance: BigDecimal!
+
+  """ Balance including any pending transactions """
+  totalBalance: BigDecimal!
+
+  """ Balance available to transact """
+  availableBalance: BigDecimal!
+
+  """ current settled shares on chain for holding"""
+  currentQuantity: Float!
+
+  """ pending shares related to bankTransactions not yet settled"""
+  pendingEstQuantity: Float!
+
+  """
+  availableEstQuantity = currentQuantity minus pending estimated shares (estimated because we don't know how many
+  shares will settle for pending cash based buys/sells)
+  """
+  availableEstQuantity: Float!
+
+  """ estimated amounts based on previously posted trade price"""
+  currentEstAmount: Float!
+  pendingEstAmount: Float!
+  availableEstAmount: Float!
+
+  """ trade price and price as of date"""
+  price: BigDecimal!
+  asOfDate: Date!
+}
+
+"""
+An institution entity as it is represented in the context of holding a wallet
+"""
+type WalletInstitutionEntity {
+  """The id of the institution entity"""
+  institutionEntityId: ID!
+
+  """The institution entity's name"""
+  institutionEntityName: String!
+}
+
+"""
+A wallet represents a blockchain address. The wallet itself is not an asset, but the holdings it contains represent
+individual assets that are held within the wallet.
+"""
+type WalletListElement {
+  """The id of this wallet"""
+  walletId: ID!
+
+  """The user defined name of this wallet"""
+  walletName: String
+
+  """The public address of this wallet. Analogous to its public key"""
+  walletAddress: String!
+
+  """The network to which this wallet belongs"""
+  network: WalletNetwork!
+}
+
+"""A network as it exists in the context of a wallet"""
+type WalletNetwork {
+  """ The internal ID of the network. This ID will be used to reference the network in other requests 
+  """
+  networkId: ID!
+
+  """ The name of the network """
+  networkName: String!
+}
+
+input WalletSigningKeyCreateInput {
+  """The id of the wallet to create the key on"""
+  walletId: ID!
+
+  """ The human readable name of the signing key"""
+  signingKeyName: String!
+
+  """The base 64 encoded public key"""
+  signingKey: String!
+}
+
+type WalletSigningKeyCreateResult {
+  """ The newly created signing key's ID"""
+  signingKeyId: ID!
+
+  """ This will be populated with the information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage!
+}
+
+input WalletSigningKeyDeleteInput {
+  walletId: ID!
+  signingKeyId: ID!
+  intentSignature: String!
+}
+
+type WalletSigningKeyDeleteResult {
+  signingKeyId: ID!
+
+  """ This will be populated with the information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage!
+}
+
+type WalletSigningKeySubmitResult {
+  """ The ID of the signing key that was submitted """
+  signingKeyId: ID!
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""The result of updating a wallet"""
+type WalletUpdateResult {
+  """ The ID of the updated wallet """
+  walletId: ID!
+}
+
+"""A paged list of wallets meeting the search criteria requested"""
+type WalletsList implements ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+
+  """ The list of elements for the current page """
+  elements: [WalletListElement!]!
+}
+
+"""
+This construct is used when moving money (deposits/withdrawal currency) using a wire transfer method
+"""
+input WirePaymentInput {
+  """ The reference number that will be used to match the currency transfer 
+  """
+  fedWireRefNumber: String!
+}
+
+"""
+A withdrawal represents tokens being removed from the wallet and resulting in a currency transfer of the corresponding
+value.
+"""
+type Withdrawal {
+  """The id of this withdrawal"""
+  withdrawalId: ID!
+
+  """The wallet housing this withdrawal"""
+  wallet: WithdrawalWallet!
+
+  """The product used in this withdrawal"""
+  product: WithdrawalProduct!
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+
+  """
+   The amount of currency to be withdrawn. Currently limited to 2 digits of precision.
+  Mutually exclusive with `quantity` 
+  """
+  value: BigDecimal
+
+  """
+   The number of shares (quantity) to be withdrawn. High precision supported.
+  Mutually exclusive with `value` 
+  """
+  quantity: BigDecimal
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+
+  """
+  If a blockchain error occurred executing this operation, this error would show details, depending on the type of error that occurred
+  """
+  blockchainError: String
+}
+
+"""The result of approving a withdrawal"""
+type WithdrawalApproveResult {
+  """ The id of the withdrawal that was approved """
+  withdrawalId: ID!
+
+  """ The current status of the withdrawal """
+  blockchainStatus: BlockchainOperationStatus!
+
+  """
+   If the creation request was instructed to build the signing package, then this will be populated with the
+  information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+}
+
+"""The result of creating a new withdrawal"""
+type WithdrawalCreateResult {
+  """ The id of the new withdrawal that was created """
+  withdrawalId: ID!
+
+  """ The current status of the withdrawal """
+  blockchainStatus: BlockchainOperationStatus!
+
+  """
+   If the creation request was instructed to build the signing package, then this will be populated with the
+  information needed to sign the operation.
+  """
+  intentSigningPackage: IntentSigningPackage
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+}
+
+"""
+A withdrawal represents tokens being removed from the wallet and resulting in a currency transfer of the corresponding
+value.
+"""
+type WithdrawalListElement {
+  """The id of this withdrawal"""
+  withdrawalId: ID!
+
+  """The wallet withdrawn from"""
+  wallet: WithdrawalWallet!
+
+  """The product used in this withdrawal"""
+  product: WithdrawalProduct!
+
+  """The number of approvals this transaction needs to be allowed to submit"""
+  approvalsRequired: Int!
+
+  """The number of approvals collected so far"""
+  approvalsCollected: Int!
+
+  """
+   The amount of currency to be withdrawn. Currently limited to 2 digits of precision.
+  Mutually exclusive with `quantity` 
+  """
+  value: BigDecimal
+
+  """
+   The number of shares (quantity) to be withdrawn. High precision supported.
+  Mutually exclusive with `value` 
+  """
+  quantity: BigDecimal
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+
+  """
+  If a blockchain error occurred executing this operation, this error would show details, depending on the type of error that occurred
+  """
+  blockchainError: String
+}
+
+"""A product as it is represented in the context of being withdrawn"""
+type WithdrawalProduct {
+  """The id of this product"""
+  productId: ID!
+
+  """ The long name of the product """
+  productName: String!
+}
+
+"""The result of rejecting a withdrawal"""
+type WithdrawalRejectResult {
+  """ The id of the new withdrawal that was rejected """
+  withdrawalId: ID!
+}
+
+"""The result of submitting a withdrawal"""
+type WithdrawalSubmitResult {
+  """ The ID of the withdrawal that was submitted """
+  withdrawalId: ID!
+
+  """The status of this operation on the blockchain"""
+  blockchainStatus: BlockchainOperationStatus!
+}
+
+"""
+A wallet as it is represented in the context of containing a withdrawal
+"""
+type WithdrawalWallet {
+  """The id of this wallet"""
+  walletId: ID!
+
+  """The user defined name of this wallet"""
+  walletName: String
+
+  """The public address of this wallet. Analogous to its public key"""
+  walletAddress: String!
+
+  """The network to which this wallet belongs"""
+  network: WalletNetwork!
+
+  """
+  The institution entity that owns this wallet. Wallets held by retail investors will have a null institution entity.
+  """
+  institutionEntity: WalletInstitutionEntity
+}
+
+"""A paged list of withdrawals meeting the search criteria requested"""
+type WithdrawalsList implements ResultsList {
+  """ The total number of pages in the available data based on the total elements and the page size 
+  """
+  totalPages: NonNegativeInt!
+
+  """ The total number of elements found """
+  totalElements: NonNegativeInt!
+
+  """ The index of the current page as requested. zero-based """
+  currentPage: NonNegativeInt!
+
+  """ The number of elements per page """
+  pageSize: PositiveInt!
+
+  """ The field the elements are sorted by """
+  sortField: String!
+
+  """ The sort order, true for ascending, false for descending """
+  ascending: Boolean!
+
+  """ The list of elements for the current page """
+  elements: [WithdrawalListElement!]!
