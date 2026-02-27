@@ -42,8 +42,8 @@ export async function executePayout(input: PayoutInput): Promise<PayoutResult> {
   if (!token) return { success: false, error: 'Token not found.' }
 
   const status = (token as { status: string }).status as TokenStatus
-  if (status !== 'PENDING_SETTLEMENT' && status !== 'ACTIVE') {
-    return { success: false, error: 'Token is not in a state that can be paid out.' }
+  if (status !== 'PENDING_SETTLEMENT') {
+    return { success: false, error: 'Token must be in PENDING_SETTLEMENT to be paid out (call after submitClaim).' }
   }
 
   const assetUuid = (token as { asset_uuid?: string | null }).asset_uuid ?? null

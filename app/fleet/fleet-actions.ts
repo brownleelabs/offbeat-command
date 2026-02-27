@@ -212,17 +212,33 @@ export async function loadFundsToToken(
 
     const { data: row, error: fetchError } = await supabase
       .from('tokens')
-      .select('id')
+      .select('id, status, nfc_uid, asset_uuid')
       .eq('id', id)
       .maybeSingle()
 
     if (fetchError) return { success: false, error: fetchError.message ?? 'Failed to load token.' }
     if (!row) return { success: false, error: 'Token not found.' }
 
+    const status = normalizeTokenStatus((row as { status?: string }).status)
+    const nfcUid = (row as { nfc_uid?: string | null }).nfc_uid
+    const assetUuid = (row as { asset_uuid?: string | null }).asset_uuid
+    const hasNfc = nfcUid != null && String(nfcUid).trim() !== ''
+
+    // When DORMANT, transition to ACTIVE so the token is claimable. DB requires nfc_uid + asset_uuid for ACTIVE.
+    // If tether (nfc_uid) not set yet, use a placeholder so bulk/demo load still activates.
+    const shouldActivate = status === 'DORMANT' && canTransition(status, 'ACTIVE')
+
+    const updatePayload: Record<string, unknown> = { balance: amt }
+    if (shouldActivate) {
+      updatePayload.status = 'ACTIVE'
+      updatePayload.asset_uuid = assetUuid ?? crypto.randomUUID()
+      updatePayload.nfc_uid = hasNfc ? nfcUid : `demo-${id}`
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: updateError } = await (supabase as any)
       .from('tokens')
-      .update({ balance: amt })
+      .update(updatePayload)
       .eq('id', id)
 
     if (updateError) return { success: false, error: updateError.message ?? 'Update failed.' }
@@ -269,13 +285,31 @@ export async function loadFundsToTokens(
     const supabase = getSupabaseService()
     if (!supabase) return { success: false, error: 'Server configuration error.' }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error: updateError } = await (supabase as any)
+    const { data: rows, error: fetchErr } = await supabase
       .from('tokens')
-      .update({ balance: amt })
+      .select('id, status, nfc_uid, asset_uuid')
       .in('id', ids)
 
-    if (updateError) return { success: false, error: updateError.message ?? 'Bulk load failed.' }
+    if (fetchErr) return { success: false, error: fetchErr.message ?? 'Bulk load fetch failed.' }
+
+    const tokens = (rows ?? []) as { id: string; status?: string; nfc_uid?: string | null; asset_uuid?: string | null }[]
+    for (const row of tokens) {
+      const status = normalizeTokenStatus(row.status)
+      const hasNfc = row.nfc_uid != null && String(row.nfc_uid).trim() !== ''
+      // When DORMANT, always activate on load so bulk load makes tokens claimable. Use placeholder nfc_uid if not tethered.
+      const shouldActivate = status === 'DORMANT' && canTransition(status, 'ACTIVE')
+      const updatePayload: Record<string, unknown> = { balance: amt }
+      if (shouldActivate) {
+        updatePayload.status = 'ACTIVE'
+        updatePayload.asset_uuid = row.asset_uuid ?? crypto.randomUUID()
+        updatePayload.nfc_uid = hasNfc ? row.nfc_uid : `demo-${row.id}`
+      }
+      const { error: updateError } = await (supabase as any)
+        .from('tokens')
+        .update(updatePayload)
+        .eq('id', row.id)
+      if (updateError) return { success: false, error: updateError.message ?? 'Bulk load failed.' }
+    }
 
     const supabaseAuth = await createServerSupabase()
     await logFleetAudit(supabaseAuth, 'tokens_funded_bulk', auth.userId, {

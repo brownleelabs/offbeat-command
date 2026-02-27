@@ -66,7 +66,7 @@ export async function claimToken(
     if (!row) return { success: false, error: 'Token ID not found.' }
     const currentStatus = (row as { status?: string }).status
     if (typeof currentStatus !== 'string' || !canTransition(currentStatus as TokenStatus, 'REDEEMED')) {
-      return { success: false, error: 'Token is not in a state that can be redeemed (only ACTIVE or PENDING_SETTLEMENT).' }
+      return { success: false, error: 'Token is not in a state that can be redeemed (only PENDING_SETTLEMENT can transition to REDEEMED).' }
     }
 
     const { data, error } = await (supabase as any)
@@ -260,12 +260,16 @@ export async function submitClaim(input: SubmitClaimInput): Promise<SubmitClaimR
       // Duplicate claim: one reward per person per campaign (by student_email)
       const emailNorm = String(studentEmail ?? '').trim().toLowerCase()
       if (emailNorm) {
-        const { data: existing } = await supabase
+        const { data: existing, error: dupErr } = await supabase
           .from('responses')
           .select('id')
           .eq('campaign_id', tokenCampaignId)
           .ilike('student_email', emailNorm)
           .limit(1)
+        if (dupErr) {
+          console.error('[submitClaim] Duplicate-claim check failed:', dupErr.message, { campaignId: tokenCampaignId, emailNorm })
+          return { success: false, error: 'Could not verify claim eligibility. Please try again.' }
+        }
         if (existing != null && existing.length > 0) {
           return { success: false, error: "You've already claimed a reward in this campaign." }
         }

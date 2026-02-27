@@ -3408,6 +3408,7 @@ function SettingsTab({
   const [createTokensSubmitting, setCreateTokensSubmitting] = useState(false);
   const [createdTokensList, setCreatedTokensList] = useState<{ id: string; claimUrl: string }[] | null>(null);
   const [createTokensError, setCreateTokensError] = useState<string | null>(null);
+  const [createdTokensCopied, setCreatedTokensCopied] = useState<{ type: "url" | "id" | "all-urls"; tokenId?: string } | null>(null);
   const [removeFundsTokenId, setRemoveFundsTokenId] = useState("");
   const [removeFundsSubmitting, setRemoveFundsSubmitting] = useState(false);
   const [removeFundsMessage, setRemoveFundsMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -3692,22 +3693,52 @@ function SettingsTab({
                 onClick={() => {
                   const all = createdTokensList.map((t) => t.claimUrl).join("\n");
                   void navigator.clipboard.writeText(all);
+                  setCreatedTokensCopied({ type: "all-urls" });
+                  window.setTimeout(() => setCreatedTokensCopied(null), 1500);
                 }}
-                className="mb-3 rounded border border-accent px-2 py-1 text-xs hover:bg-muted"
+                className={`mb-3 rounded border px-2 py-1 text-xs transition-colors ${
+                  createdTokensCopied?.type === "all-urls"
+                    ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                    : "border-accent hover:bg-muted"
+                }`}
               >
-                Copy all URLs
+                {createdTokensCopied?.type === "all-urls" ? "Copied!" : "Copy all URLs"}
               </button>
               <ul className="space-y-1.5 font-mono text-xs">
                 {createdTokensList.map((t, i) => (
-                  <li key={t.id} className="flex items-center gap-2">
+                  <li key={t.id} className="flex flex-wrap items-center gap-2">
                     <span className="text-muted-foreground">{i + 1}.</span>
                     <span className="truncate text-white">{t.claimUrl}</span>
                     <button
                       type="button"
-                      onClick={() => void navigator.clipboard.writeText(t.claimUrl)}
-                      className="shrink-0 rounded border border-accent px-1.5 py-0.5 text-xs hover:bg-muted"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(t.claimUrl);
+                        setCreatedTokensCopied({ type: "url", tokenId: t.id });
+                        window.setTimeout(() => setCreatedTokensCopied(null), 1500);
+                      }}
+                      className={`shrink-0 rounded border px-1.5 py-0.5 text-xs transition-colors ${
+                        createdTokensCopied?.type === "url" && createdTokensCopied?.tokenId === t.id
+                          ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                          : "border-accent hover:bg-muted"
+                      }`}
                     >
-                      Copy
+                      {createdTokensCopied?.type === "url" && createdTokensCopied?.tokenId === t.id ? "Copied!" : "Copy URL"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(t.id);
+                        setCreatedTokensCopied({ type: "id", tokenId: t.id });
+                        window.setTimeout(() => setCreatedTokensCopied(null), 1500);
+                      }}
+                      className={`shrink-0 rounded border px-1.5 py-0.5 text-xs transition-colors ${
+                        createdTokensCopied?.type === "id" && createdTokensCopied?.tokenId === t.id
+                          ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                          : "border-accent hover:bg-muted"
+                      }`}
+                      title="Copy token ID (for Remove funds, etc.)"
+                    >
+                      {createdTokensCopied?.type === "id" && createdTokensCopied?.tokenId === t.id ? "Copied!" : "Copy ID"}
                     </button>
                   </li>
                 ))}

@@ -104,13 +104,27 @@ export async function GET(request: Request) {
         if (!updateErr) minted++;
       }
 
-      await (supabase as any)
+      // Critical: persist consumed yield so the next run does not double-mint. If this fails, report failure.
+      const newLastChecked = lastChecked + minted * TOKEN_VALUE_USD;
+      const { error: settingsErr } = await (supabase as any)
         .from("site_settings")
         .update({
-          benji_last_checked_amount: lastChecked + minted * TOKEN_VALUE_USD,
+          benji_last_checked_amount: newLastChecked,
           updated_at: new Date().toISOString(),
         })
         .eq("id", 1);
+
+      if (settingsErr) {
+        console.error("[yield-distribution] site_settings update failed after minting:", settingsErr.message, { minted, newLastChecked });
+        return NextResponse.json(
+          {
+            error: "Failed to persist mint tracking; yield state not updated. Fix site_settings and reconcile benji_last_checked_amount.",
+            minted,
+            details: settingsErr.message,
+          },
+          { status: 500 }
+        );
+      }
     }
 
     // Slow Rail: REDEEMED last 24h → transferCreate; optional withdrawalCreate for buffer refill
